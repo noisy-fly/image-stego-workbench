@@ -24,7 +24,12 @@ jobs:
       - name: 运行测试
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest discover -s tests -v
+        shell: pwsh
+        run: |
+          Get-ChildItem tests -Filter 'test_*.py' | ForEach-Object {
+            python -m unittest discover -s tests -p $_.Name -v
+            if ($LASTEXITCODE -ne 0) { throw "测试失败: $($_.Name)" }
+          }
       - name: 打包 Windows 程序
         run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow app.py
       - name: 编译中文安装向导
