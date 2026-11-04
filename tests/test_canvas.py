@@ -5,6 +5,7 @@ import numpy as np
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QPointF, QEvent
 from PySide6.QtGui import QMouseEvent
+from PySide6.QtTest import QTest
 from app import Main
 
 
@@ -73,6 +74,63 @@ class CanvasTests(unittest.TestCase):
         old = op.pos(); a.setPos(30, 300)
         self.assertNotEqual(old, op.pos())
         w.close()
+
+    def test_batch_pairs_layout_and_undo(self):
+        w = Main(); cards = []
+        for i in range(20):
+            cards.append(w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), f'{i:03}.png'))
+        w.make_pairs(cards, [[(i, i+2), (i+1, i+3)] for i in range(0, 20, 4)])
+        self.assertEqual(len(w.operations), 10)
+        self.assertEqual([c.title for c in w.operations[0].sources], ['000.png', '002.png'])
+        for i, card in enumerate(w.cards):
+            for other in w.cards[i+1:]:
+                self.assertFalse(card.sceneBoundingRect().intersects(other.sceneBoundingRect()))
+            for op in w.operations:
+                self.assertFalse(card.sceneBoundingRect().intersects(op.sceneBoundingRect()))
+        w.undo(); self.assertEqual(len(w.operations), 0); self.assertEqual(len(w.cards), 20)
+        w.redo(); self.assertEqual(len(w.operations), 10)
+        w.close()
+
+    def test_copy_paste_and_undo(self):
+        w = Main(); card = w.add_card(np.full((3, 3, 4), 123, dtype=np.uint8), '原图')
+        card.setSelected(True); w.copy_selection(); w.paste_selection()
+        self.assertEqual(len(w.cards), 2)
+        np.testing.assert_array_equal(w.cards[1].image, w.cards[0].image)
+        w.undo(); self.assertEqual(len(w.cards), 1)
+        w.redo(); self.assertEqual(len(w.cards), 2)
+        QApplication.clipboard().clear()
+        w.close()
+
+    def test_delete_linked_image_undo_restores_links(self):
+        w = Main()
+        a = w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), 'a')
+        b = w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), 'b')
+        op = w.create_operation([a, b]); op.setSelected(True); w.apply_xor()
+        w.canvas.scene().clearSelection(); a.setSelected(True); w.delete_selection()
+        self.assertEqual((len(w.cards), len(w.operations)), (2, 0))
+        w.undo(); self.assertEqual((len(w.cards), len(w.operations)), (3, 1))
+        self.assertIsNotNone(w.operations[0].output)
+        w.close()
+
+    def test_paste_external_image(self):
+        from PySide6.QtGui import QImage, QColor
+        w = Main(); image = QImage(2, 2, QImage.Format.Format_RGBA8888); image.fill(QColor(7, 8, 9, 255))
+        QApplication.clipboard().setImage(image); w.paste_selection()
+        self.assertEqual(w.cards[0].image[0, 0].tolist(), [7, 8, 9, 255])
+        QApplication.clipboard().clear(); w.close()
+
+    def test_keyboard_shortcuts(self):
+        w = Main(); w.show(); w.activateWindow(); w.canvas.setFocus(); self.app.processEvents()
+        w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), 'a')
+        QTest.keyClick(w.canvas, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        QTest.keyClick(w.canvas, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        QTest.keyClick(w.canvas, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(w.cards), 2)
+        QTest.keyClick(w.canvas, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(w.cards), 1)
+        QTest.keyClick(w.canvas, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(w.cards), 2)
+        QApplication.clipboard().clear(); w.close()
 
 
 if __name__ == '__main__': unittest.main()

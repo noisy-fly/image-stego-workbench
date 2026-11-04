@@ -1,10 +1,11 @@
 import sys
 import re
+import uuid
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import Qt, QTimer, QPointF, QEvent
+from PySide6.QtCore import Qt, QTimer, QPointF, QEvent, QMimeData, QRectF
 from PySide6.QtGui import QImage, QPixmap, QPainterPath, QPen, QColor, QAction, QMouseEvent
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QMessageBox, QGraphicsView, QGraphicsScene,
@@ -168,9 +169,12 @@ class Operation(QGraphicsEllipseItem):
         self.paths = []
         self.setBrush(QColor('#d9f1ed')); self.setPen(QPen(QColor('#57c4b4'), 2))
         self.setFlags(self.GraphicsItemFlag.ItemIsSelectable)
-        label = QGraphicsTextItem('+', self); label.setDefaultTextColor(QColor('#174f49')); label.setPos(5, -5)
-        label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         for source in sources: source.links.append(self)
+
+    def paint(self, painter, option, widget=None):
+        super().paint(painter, option, widget)
+        painter.setPen(QPen(QColor('#174f49'), 2.5))
+        painter.drawLine(10, 17, 24, 17); painter.drawLine(17, 10, 17, 24)
 
     def update_paths(self):
         for item in self.paths:
@@ -209,6 +213,7 @@ class Canvas(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.auto_timer = QTimer(self); self.auto_timer.setInterval(25); self.auto_timer.timeout.connect(self.auto_scroll)
         self.drag_position = None
+        self.move_before = None; self.move_positions = None
         QTimer.singleShot(0, lambda: (self.horizontalScrollBar().setValue(0), self.verticalScrollBar().setValue(0)))
 
     def dragEnterEvent(self, event):
@@ -219,6 +224,9 @@ class Canvas(QGraphicsView):
         self.owner.load_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]); event.acceptProposedAction()
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.itemAt(event.position().toPoint()) is not None:
+            self.move_before = self.owner.snapshot()
+            self.move_positions = [(c.pos().x(), c.pos().y()) for c in self.owner.cards]
         super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton and self.itemAt(event.position().toPoint()) is None:
             self.drag_position = event.position(); self.auto_timer.start()
@@ -230,6 +238,9 @@ class Canvas(QGraphicsView):
     def mouseReleaseEvent(self, event):
         self.auto_timer.stop(); self.drag_position = None
         super().mouseReleaseEvent(event)
+        if self.move_before is not None and self.move_positions != [(c.pos().x(), c.pos().y()) for c in self.owner.cards]:
+            self.owner.remember(self.move_before)
+        self.move_before = None; self.move_positions = None
 
     def auto_scroll(self):
         if self.drag_position is None: return
@@ -251,7 +262,7 @@ class Canvas(QGraphicsView):
 
 
 class PairDialog(QDialog):
-    def __init__(self, parent, names):
+    def __init__(self, parent, names, graph=False):
         super().__init__(parent); self.names = names; self.groups = None
         self.setWindowTitle('配置批量配对'); self.resize(650, 420)
         box = QVBoxLayout(self)
@@ -262,9 +273,10 @@ class PairDialog(QDialog):
         self.step = QSpinBox(); self.step.setRange(1, max(1, len(names)//2)); self.step.setPrefix('步长 / 间隔：'); self.step.setValue(1); box.addWidget(self.step)
         self.offset = QSpinBox(); self.offset.setRange(1, 1); self.offset.setPrefix('选择第几组（从 1 开始）：'); box.addWidget(self.offset)
         self.threshold = QSpinBox(); self.threshold.setRange(0, 255); self.threshold.setValue(129); self.threshold.setPrefix('二值化阈值：'); box.addWidget(self.threshold)
+        if graph: self.threshold.hide()
         box.addWidget(QLabel('配对预览（每组展示前 4 对；计算前请核对）：'))
         self.preview = QTextEdit(); self.preview.setReadOnly(True); box.addWidget(self.preview)
-        buttons = QHBoxLayout(); run = QPushButton('开始计算'); cancel = QPushButton('取消')
+        buttons = QHBoxLayout(); run = QPushButton('创建配对' if graph else '开始计算'); cancel = QPushButton('取消')
         run.clicked.connect(self.confirm); cancel.clicked.connect(self.reject); buttons.addWidget(run); buttons.addWidget(cancel); box.addLayout(buttons)
         self.mode.currentIndexChanged.connect(self.refresh); self.step.valueChanged.connect(self.refresh); self.offset.valueChanged.connect(self.refresh)
         self.refresh()
@@ -291,6 +303,7 @@ class PairDialog(QDialog):
 class Main(QMainWindow):
     def __init__(self):
         super().__init__(); self.cards = []; self.operations = []; self.setWindowTitle('图片隐写工作台'); self.resize(1200, 800)
+        self.undo_stack = []; self.redo_stack = []; self.clipboard_cards = []; self.clipboard_token = ''
         self.tip = QLabel(None, Qt.WindowType.ToolTip); self.tip.setStyleSheet('background:#111;padding:6px;')
         panel = QWidget(); self.setCentralWidget(panel); layout = QVBoxLayout(panel)
         title = QLabel('图片隐写工作台'); title.setStyleSheet('font-size:23px;font-weight:700;'); layout.addWidget(title)
@@ -301,7 +314,81 @@ class Main(QMainWindow):
         toolbar.addStretch(); layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
         self.statusBar().showMessage('准备就绪')
-        select_all = QAction(self); select_all.setShortcut('Ctrl+A'); select_all.triggered.connect(self.select_all); self.addAction(select_all)
+        for key, callback in [('Ctrl+A', self.select_all), ('Ctrl+C', self.copy_selection), ('Ctrl+V', self.paste_selection),
+                              ('Ctrl+Z', self.undo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+Y', self.redo), ('Delete', self.delete_selection)]:
+            action = QAction(self); action.setShortcut(key); action.triggered.connect(callback); self.addAction(action)
+
+    def snapshot(self):
+        indices = {card: i for i, card in enumerate(self.cards)}
+        cards = [(c.image, c.title, c.pos().x(), c.pos().y(), c.isSelected()) for c in self.cards]
+        operations = [([indices[c] for c in op.sources], indices[op.output] if op.output is not None else None, op.isSelected()) for op in self.operations]
+        return cards, operations, self.canvas.sceneRect()
+
+    def remember(self, before):
+        self.undo_stack.append(before); self.undo_stack = self.undo_stack[-25:]; self.redo_stack.clear()
+
+    def restore(self, state):
+        cards, operations, rect = state
+        self.tip.hide()
+        for card in self.cards: card.timer.stop()
+        self.canvas.scene().clear(); self.cards = []; self.operations = []
+        self.canvas.setSceneRect(rect)
+        for image, title, x, y, selected in cards:
+            card = Card(self, image, title); self.canvas.scene().addItem(card); self.cards.append(card)
+            card.setPos(x, y); card.setSelected(selected)
+        for sources, output, selected in operations:
+            op = self.create_operation([self.cards[i] for i in sources]); op.setSelected(selected)
+            if output is not None:
+                op.output = self.cards[output]; op.output.links.append(op); op.update_paths()
+
+    def undo(self):
+        if not self.undo_stack: self.statusBar().showMessage('没有可撤销的操作'); return
+        self.redo_stack.append(self.snapshot()); self.restore(self.undo_stack.pop()); self.statusBar().showMessage('已撤销')
+
+    def redo(self):
+        if not self.redo_stack: self.statusBar().showMessage('没有可重做的操作'); return
+        self.undo_stack.append(self.snapshot()); self.restore(self.redo_stack.pop()); self.statusBar().showMessage('已重做')
+
+    def copy_selection(self):
+        cards = self.selected_cards()
+        if not cards: self.statusBar().showMessage('请先选择图片'); return
+        self.clipboard_cards = [(c.image, c.title, c.pos().x(), c.pos().y()) for c in cards]
+        self.clipboard_token = uuid.uuid4().hex
+        mime = QMimeData(); mime.setData('application/x-stego-workbench', self.clipboard_token.encode())
+        if len(cards) == 1: mime.setImageData(pixmap(cards[0].image).toImage())
+        QApplication.clipboard().setMimeData(mime)
+        self.statusBar().showMessage(f'已复制 {len(cards)} 张图片')
+
+    def paste_selection(self):
+        mime = QApplication.clipboard().mimeData()
+        if mime.hasUrls():
+            self.load_paths([url.toLocalFile() for url in mime.urls() if url.isLocalFile()]); return
+        if mime.hasFormat('application/x-stego-workbench') and bytes(mime.data('application/x-stego-workbench')).decode() == self.clipboard_token:
+            copies = self.clipboard_cards
+        elif mime.hasImage():
+            image = QApplication.clipboard().image().convertToFormat(QImage.Format.Format_RGBA8888)
+            data = np.frombuffer(image.bits(), dtype=np.uint8).reshape(image.height(), image.bytesPerLine())[:, :image.width()*4].reshape(image.height(), image.width(), 4).copy()
+            copies = [(data, '剪贴板图片', 0, 0)]
+        else:
+            self.statusBar().showMessage('剪贴板中没有可粘贴的图片'); return
+        before = self.snapshot(); self.canvas.scene().clearSelection()
+        for image, title, x, y in copies:
+            card = self.add_card(image, title + ' 副本'); card.setSelected(True)
+        self.remember(before); self.statusBar().showMessage(f'已粘贴 {len(copies)} 张图片')
+
+    def delete_selection(self):
+        cards = [c for c in self.cards if c.isSelected()]
+        ops = [op for op in self.operations if op.isSelected() or any(c in op.sources or c is op.output for c in cards)]
+        if not cards and not ops: return
+        before = self.snapshot()
+        for op in ops:
+            for card in op.sources + ([op.output] if op.output is not None else []):
+                if op in card.links: card.links.remove(op)
+            for path in op.paths: self.canvas.scene().removeItem(path)
+            self.canvas.scene().removeItem(op); self.operations.remove(op)
+        for card in cards:
+            card.timer.stop(); self.canvas.scene().removeItem(card); self.cards.remove(card)
+        self.remember(before); self.statusBar().showMessage('已从画布删除，Ctrl+Z 可撤销')
 
     def select_all(self):
         for item in self.cards + self.operations: item.setSelected(True)
@@ -315,22 +402,36 @@ class Main(QMainWindow):
         Workflow(self).exec()
 
     def load_paths(self, paths):
+        before = self.snapshot(); old_count = len(self.cards)
         errors = []
         for path in sorted(paths, key=lambda p: natural_key(Path(p).name)):
             try: self.add_card(load_image(path), Path(path).name)
             except Exception as e: errors.append(f'{Path(path).name}: {e}')
         if errors: QMessageBox.warning(self, '部分图片无法打开', '\n'.join(errors[:10]))
+        if len(self.cards) != old_count: self.remember(before)
         self.statusBar().showMessage(f'画布中有 {len(self.cards)} 张图片')
 
     def add_card(self, image, title):
         card = Card(self, image, title); self.canvas.scene().addItem(card)
-        i = len(self.cards); card.setPos(30 + (i % 10)*110, 30 + (i // 10)*90); self.cards.append(card)
+        i = 0
+        occupied = [c.sceneBoundingRect().adjusted(-10, -10, 10, 28) for c in self.cards]
+        occupied += [op.sceneBoundingRect().adjusted(-10, -10, 10, 10) for op in self.operations]
+        while True:
+            x, y = 30 + (i % 10)*110, 30 + (i // 10)*90
+            rect = QRectF(x, y, 72, 70)
+            if not any(rect.intersects(other) for other in occupied): break
+            i += 1
+        card.setPos(x, y); self.cards.append(card); self.expand_scene(x+160, y+150)
         return card
+
+    def expand_scene(self, x, y):
+        rect = self.canvas.sceneRect()
+        self.canvas.setSceneRect(rect.united(QRectF(0, 0, x, y)))
 
     def remove_card(self, card):
         if card.links:
             QMessageBox.information(self, '无法移除', '此图片已连接处理节点，请先保留它。'); return
-        self.cards.remove(card); self.canvas.scene().removeItem(card)
+        before = self.snapshot(); card.timer.stop(); self.cards.remove(card); self.canvas.scene().removeItem(card); self.remember(before)
 
     def selected_cards(self):
         return sorted((c for c in self.cards if c.isSelected()), key=lambda c: natural_key(c.title))
@@ -341,16 +442,37 @@ class Main(QMainWindow):
 
     def create_pairs(self):
         cards = self.selected_cards()
-        if len(cards) < 2 or len(cards) % 2:
-            QMessageBox.information(self, '创建配对', '请先框选偶数张图片（至少两张），将按文件名自然排序后两两配对。'); return
+        if len(cards) < 2:
+            QMessageBox.information(self, '创建配对', '请先框选至少两张图片。'); return
+        dialog = PairDialog(self, [c.title for c in cards], graph=True)
+        if dialog.exec() != QDialog.DialogCode.Accepted: return
+        chosen = [cards[i] for group in dialog.groups for pair in group for i in pair]
+        if any(card.links for card in chosen):
+            QMessageBox.information(self, '已有连接', '所选图片中已有连接，请先删除对应节点或复制图片再创建配对。'); return
+        self.make_pairs(cards, dialog.groups)
+
+    def make_pairs(self, cards, groups):
+        pairs = [pair for group in groups for pair in group]
+        before = self.snapshot()
+        chosen = {cards[i] for pair in pairs for i in pair}
+        others = [c for c in self.cards if c not in chosen]
+        origin_x = max([c.sceneBoundingRect().right() + 200 for c in others] +
+                       [op.sceneBoundingRect().right() + 200 for op in self.operations] + [-70]) + 100
+        origin_y = 30
         self.canvas.scene().clearSelection()
-        for i in range(0, len(cards), 2): self.create_operation(cards[i:i+2])
-        self.statusBar().showMessage(f'已创建 {len(cards)//2} 个待处理节点；框选 + 后选择操作')
+        for index, (a, b) in enumerate(pairs):
+            x, y = origin_x + (index % 3)*380, origin_y + (index // 3)*165
+            cards[a].setPos(x, y); cards[b].setPos(x, y+75)
+            self.create_operation([cards[a], cards[b]])
+        self.expand_scene(origin_x+3*380, origin_y+((len(pairs)+2)//3)*165+150)
+        self.remember(before)
+        self.statusBar().showMessage(f'已创建 {len(pairs)} 个待处理节点；框选 + 后选择操作')
 
     def apply_xor(self):
         operations = [op for op in self.operations if op.isSelected()]
         if not operations:
             QMessageBox.information(self, '选择处理节点', '请先框选一个或多个 + 节点。'); return
+        before = self.snapshot()
         for op in operations:
             if op.output is not None:
                 QMessageBox.warning(self, '已有结果', '所选节点已有结果，不能重复处理。'); return
@@ -362,6 +484,7 @@ class Main(QMainWindow):
             result = np.bitwise_xor(a, b); result[:, :, 3] = 255
             out = self.add_card(result, 'XOR 结果'); out.setPos(op.pos() + QPointF(100, 0))
             op.output = out; out.links.append(op); op.update_paths()
+        self.remember(before)
         self.statusBar().showMessage(f'已完成 {len(operations)} 个 XOR')
 
     def selected_pair_average(self, threshold):
@@ -384,7 +507,9 @@ class Main(QMainWindow):
                 frames = [get_image(index) for pair in group for index in pair]
                 result = pair_xor_average(frames, dialog.threshold.value())
                 results.append(np.array(Image.fromarray(result).convert('RGBA')))
+            before = self.snapshot()
             for i, result in enumerate(results): self.add_card(result, f'第{i+1}组 XOR 平均')
+            self.remember(before)
             self.statusBar().showMessage(f'已完成 {len(results)} 组、{sum(map(len, dialog.groups))} 对图片')
         except Exception as e: QMessageBox.warning(self, '处理失败', str(e))
 
