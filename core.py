@@ -1,5 +1,6 @@
 """独立实现的像素分析操作；所有输入均为原始 8 位像素。"""
 import numpy as np
+import re
 from PIL import Image, ImageOps, ImageFilter
 
 
@@ -123,6 +124,35 @@ def extract_bits(image, components, bits, column_first=False, lsb_first=False,
     values = values[bit_offset:]
     values = values[:len(values) // 8 * 8]
     return np.packbits(values, bitorder='little' if lsb_first else 'big').tobytes()
+
+
+def scan_lsb(image, max_pixels=65536):
+    """检查有限像素前缀，返回可复现的扫描参数和疑似线索。"""
+    if image.ndim != 3 or image.shape[2] != 4 or image.dtype != np.uint8 or max_pixels < 1:
+        raise ValueError('需要 8 位 RGBA 图片和正数扫描范围。')
+    signatures = [('PNG 文件头', b'\x89PNG\r\n\x1a\n'), ('ZIP 文件头', b'PK\x03\x04'),
+                  ('GIF 文件头', b'GIF89a'), ('GIF 文件头', b'GIF87a'),
+                  ('PDF 文件头', b'%PDF-'), ('7z 文件头', b'7z\xbc\xaf\x27\x1c'),
+                  ('RAR 文件头', b'Rar!\x1a\x07'), ('GZIP 文件头', b'\x1f\x8b\x08')]
+    channel_sets = [(0,), (1,), (2,), (3,), (0,1,2), (0,1,2,3)]
+    height, width = image.shape[:2]; count = min(height * width, max_pixels)
+    positions = np.arange(count); results = []
+    for column in (False, True):
+        y, x = (positions % height, positions // height) if column else (positions // width, positions % width)
+        pixels = image[y, x]
+        for channels in channel_sets:
+            for bit in (0, 1):
+                values = ((pixels[:, channels] >> bit) & 1).reshape(-1)
+                for little in (False, True):
+                    data = np.packbits(values[:len(values)//8*8], bitorder='little' if little else 'big').tobytes()
+                    hits = [(kind, data.find(signature)) for kind, signature in signatures]
+                    match = re.search(rb'(?i)(?:flag|ctf)\{[\x20-\x7d]{1,200}\}', data)
+                    if match: hits.insert(0, ('flag 样式文本', match.start()))
+                    for kind, offset in hits:
+                        if offset >= 0:
+                            results.append({'channels': channels, 'bit': bit, 'column': column, 'little': little,
+                                            'kind': kind, 'offset': offset, 'preview': data[offset:offset+80]})
+    return results
 
 
 def pair_xor_average(frames, threshold=129):

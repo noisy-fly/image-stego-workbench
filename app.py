@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QGraphicsEllipseItem, QGraphicsPathItem)
 from PySide6.QtGui import QIcon
 from core import (load_image, bit_plane, channel, invert, extract_bits, pair_xor_average,
-                  make_pair_groups, process_image, combine_images, aggregate_images)
+                  make_pair_groups, process_image, combine_images, aggregate_images, scan_lsb)
 
 
 def natural_key(value):
@@ -67,7 +67,7 @@ class Analysis(QDialog):
         self.list.currentRowChanged.connect(self.show_variant)
         layout.addWidget(self.list)
         buttons = QHBoxLayout()
-        for label, callback in [('保存当前图片', self.save), ('提取 LSB 数据', self.extract)]:
+        for label, callback in [('保存当前图片', self.save), ('LSB 快速检查', self.quick_scan), ('手动提取位数据', self.extract)]:
             button = QPushButton(label)
             button.clicked.connect(callback)
             buttons.addWidget(button)
@@ -89,7 +89,40 @@ class Analysis(QDialog):
     def save(self):
         save_image(self, self.variants[self.list.currentRow()][1])
 
-    def extract(self):
+    def quick_scan(self):
+        dialog = QDialog(self); dialog.setWindowTitle('LSB 快速检查'); dialog.resize(820, 600)
+        box = QVBoxLayout(dialog)
+        box.addWidget(QLabel('检查前 65,536 个像素；按行 / 按列、RGBA 常见组合、最低两位及两种字节位序。'))
+        box.addWidget(QLabel('只识别少量常见文件头和 flag{…} / ctf{…} 样式文本；候选可能误报，未发现不代表没有隐写。'))
+        status = QLabel('正在检查…'); box.addWidget(status)
+        results_list = QListWidget(); box.addWidget(results_list)
+        preview = QTextEdit(); preview.setReadOnly(True); preview.setMaximumHeight(145); box.addWidget(preview)
+        button = QPushButton('使用选中结果的参数提取完整数据'); button.setEnabled(False); box.addWidget(button)
+        results = []
+        def run():
+            try:
+                results.extend(scan_lsb(self.image))
+            except Exception as exc:
+                status.setText('检查失败：' + str(exc)); return
+            status.setText(f'检查完成：发现 {len(results)} 条候选线索' if results else '检查完成：没有发现上述范围内的线索')
+            for item in results:
+                channels = ''.join('RGBA'[i] for i in item['channels'])
+                order = '按列' if item['column'] else '按行'
+                packing = '低位先装入' if item['little'] else '高位先装入'
+                results_list.addItem(f"{item['kind']} · {channels} 第 {item['bit']} 位 · {order} · {packing} · 字节偏移 {item['offset']}")
+        def show_result(index):
+            button.setEnabled(index >= 0)
+            if index < 0: preview.clear(); return
+            data = results[index]['preview']
+            preview.setPlainText('命中位置起的预览（最多 80 字节）：\n文本：' + data.decode('utf-8', errors='replace') + '\n十六进制：' + data.hex(' '))
+        def open_extract():
+            index = results_list.currentRow()
+            if index >= 0: self.extract(results[index])
+        results_list.currentRowChanged.connect(show_result); button.clicked.connect(open_extract)
+        QTimer.singleShot(0, run); dialog.exec()
+
+    def extract(self, preset=None):
+        if not isinstance(preset, dict): preset = {}
         dialog = QDialog(self)
         dialog.setWindowTitle('提取像素位数据')
         dialog.resize(700, 500)
@@ -99,19 +132,20 @@ class Analysis(QDialog):
         checks = []
         for name in 'RGBA':
             c = QCheckBox(name)
-            c.setChecked(name in 'RGB')
+            c.setChecked('RGBA'.index(name) in preset.get('channels', (0, 1, 2)))
             row.addWidget(c)
             checks.append(c)
         box.addLayout(row)
         bit_row = QHBoxLayout(); bit_checks = []
         for i in range(8):
-            check = QCheckBox(f'第{i}位'); check.setChecked(i == 0); bit_checks.append(check); bit_row.addWidget(check)
+            check = QCheckBox(f'第{i}位'); check.setChecked(i == preset.get('bit', 0)); bit_checks.append(check); bit_row.addWidget(check)
         box.addLayout(bit_row)
-        column = QCheckBox('按列扫描（默认按行）'); box.addWidget(column)
+        column = QCheckBox('按列扫描（默认按行）'); column.setChecked(preset.get('column', False)); box.addWidget(column)
         reverse_x = QCheckBox('水平反向扫描（从右向左）'); box.addWidget(reverse_x)
         reverse_y = QCheckBox('垂直反向扫描（从下向上）'); box.addWidget(reverse_y)
-        little = QCheckBox('每字节低位先写入'); box.addWidget(little)
-        offset = QSpinBox(); offset.setRange(0, 1000000000); offset.setPrefix('跳过前面的位数：'); box.addWidget(offset)
+        little = QCheckBox('每字节低位先写入'); little.setChecked(preset.get('little', False)); box.addWidget(little)
+        offset = QSpinBox(); offset.setRange(0, 1000000000); offset.setPrefix('跳过前面的位数：'); offset.setValue(preset.get('offset', 0) * 8); box.addWidget(offset)
+        if preset: box.addWidget(QLabel('已载入候选参数，提取从该线索的字节偏移处开始。'))
         output = QTextEdit(); output.setReadOnly(True); box.addWidget(output)
         data = [b'']
         def run():
