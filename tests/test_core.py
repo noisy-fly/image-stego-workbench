@@ -1,9 +1,14 @@
 import unittest
 import numpy as np
-from core import bit_plane, invert, channel, extract_bits, pair_xor_average
+from core import bit_plane, invert, channel, extract_bits, pair_xor_average, make_pair_groups
 
 
 class ImageAnalysisTests(unittest.TestCase):
+    def test_configurable_pairing(self):
+        self.assertEqual(make_pair_groups(8, 2, 'groups'), [[(0, 2), (4, 6)], [(1, 3), (5, 7)]])
+        self.assertEqual(make_pair_groups(8, 2, 'subset', 1), [[(1, 3), (5, 7)]])
+        self.assertEqual(make_pair_groups(6, 3, 'distance'), [[(0, 3), (1, 4), (2, 5)]])
+        with self.assertRaises(ValueError): make_pair_groups(7, 2, 'groups')
     def setUp(self):
         self.image = np.array([[[1, 2, 3, 255], [4, 5, 6, 128]]], dtype=np.uint8)
 

@@ -4,15 +4,15 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import Qt, QTimer, QPointF
-from PySide6.QtGui import QImage, QPixmap, QPainterPath, QPen, QColor, QAction
+from PySide6.QtCore import Qt, QTimer, QPointF, QEvent
+from PySide6.QtGui import QImage, QPixmap, QPainterPath, QPen, QColor, QAction, QMouseEvent
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QMessageBox, QGraphicsView, QGraphicsScene,
     QGraphicsPixmapItem, QGraphicsTextItem, QMenu, QDialog, QListWidget, QListWidgetItem,
     QSplitter, QSpinBox, QComboBox, QCheckBox, QTextEdit, QInputDialog,
     QGraphicsEllipseItem, QGraphicsPathItem)
 from PySide6.QtGui import QIcon
-from core import load_image, bit_plane, channel, invert, extract_bits, pair_xor_average
+from core import load_image, bit_plane, channel, invert, extract_bits, pair_xor_average, make_pair_groups
 
 
 def natural_key(value):
@@ -167,28 +167,36 @@ class Operation(QGraphicsEllipseItem):
         self.owner, self.sources, self.output = owner, sources, None
         self.paths = []
         self.setBrush(QColor('#d9f1ed')); self.setPen(QPen(QColor('#57c4b4'), 2))
-        self.setFlags(self.GraphicsItemFlag.ItemIsSelectable | self.GraphicsItemFlag.ItemIsMovable | self.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlags(self.GraphicsItemFlag.ItemIsSelectable)
         label = QGraphicsTextItem('+', self); label.setDefaultTextColor(QColor('#174f49')); label.setPos(5, -5)
         label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         for source in sources: source.links.append(self)
-
-    def itemChange(self, change, value):
-        if change == self.GraphicsItemChange.ItemPositionHasChanged and hasattr(self, 'paths'):
-            self.update_paths()
-        return super().itemChange(change, value)
 
     def update_paths(self):
         for item in self.paths:
             if item.scene(): item.scene().removeItem(item)
         self.paths.clear()
-        center = self.scenePos() + QPointF(17, 17)
-        pairs = [(s.scenePos() + QPointF(s.boundingRect().width(), s.boundingRect().height()/2), center) for s in self.sources]
-        if self.output: pairs.append((center, self.output.scenePos() + QPointF(0, self.output.boundingRect().height()/2)))
+        starts = [s.scenePos() + QPointF(s.boundingRect().width(), s.boundingRect().height()/2) for s in self.sources]
+        midpoint = sum(starts, QPointF()) / len(starts)
+        if self.output:
+            rect = self.output.boundingRect(); outpos = self.output.scenePos()
+            end = outpos + QPointF(0 if outpos.x() >= midpoint.x() else rect.width(), rect.height()/2)
+            starts = [s.scenePos() + QPointF(s.boundingRect().width() if end.x() >= s.scenePos().x() else 0,
+                                             s.boundingRect().height()/2) for s in self.sources]
+            midpoint = sum(starts, QPointF()) / len(starts)
+        else:
+            end = QPointF(max(p.x() for p in starts) + 160, midpoint.y())
+        guide = QPainterPath(midpoint); reach = max(20, abs(end.x() - midpoint.x()) * .45) * (1 if end.x() >= midpoint.x() else -1)
+        guide.cubicTo(midpoint + QPointF(reach, 0), end - QPointF(reach, 0), end)
+        center = guide.pointAtPercent(.5)
+        self.setPos(center - QPointF(17, 17))
+        pairs = [(p, center) for p in starts] + [(center, end)]
         for start, end in pairs:
-            path = QPainterPath(start); dx = max(30, abs(end.x()-start.x())/2)
+            path = QPainterPath(start); dx = max(15, abs(end.x()-start.x())/2) * (1 if end.x() >= start.x() else -1)
             path.cubicTo(start + QPointF(dx, 0), end - QPointF(dx, 0), end)
-            if self.output is not None and start == center:
-                path.moveTo(end + QPointF(-10, -5)); path.lineTo(end); path.lineTo(end + QPointF(-10, 5))
+            if start == center:
+                direction = 1 if end.x() >= start.x() else -1
+                path.moveTo(end + QPointF(-10*direction, -5)); path.lineTo(end); path.lineTo(end + QPointF(-10*direction, 5))
             item = QGraphicsPathItem(path); item.setPen(QPen(QColor('#58b4ac'), 2)); item.setZValue(-1)
             self.owner.canvas.scene().addItem(item); self.paths.append(item)
 
@@ -199,6 +207,8 @@ class Canvas(QGraphicsView):
         self.setSceneRect(0, 0, 3000, 2000)
         self.setStyleSheet('background:#1a202c; border:0;')
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.auto_timer = QTimer(self); self.auto_timer.setInterval(25); self.auto_timer.timeout.connect(self.auto_scroll)
+        self.drag_position = None
         QTimer.singleShot(0, lambda: (self.horizontalScrollBar().setValue(0), self.verticalScrollBar().setValue(0)))
 
     def dragEnterEvent(self, event):
@@ -208,6 +218,75 @@ class Canvas(QGraphicsView):
     def dropEvent(self, event):
         self.owner.load_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]); event.acceptProposedAction()
 
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and self.itemAt(event.position().toPoint()) is None:
+            self.drag_position = event.position(); self.auto_timer.start()
+
+    def mouseMoveEvent(self, event):
+        if self.auto_timer.isActive(): self.drag_position = event.position()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.auto_timer.stop(); self.drag_position = None
+        super().mouseReleaseEvent(event)
+
+    def auto_scroll(self):
+        if self.drag_position is None: return
+        edge = 75
+        def speed(pos, size):
+            if pos < edge: return -max(1, min(30, int((edge-pos)*.4)))
+            if pos > size-edge: return max(1, min(30, int((pos-(size-edge))*.4)))
+            return 0
+        dx = speed(self.drag_position.x(), self.viewport().width())
+        dy = speed(self.drag_position.y(), self.viewport().height())
+        if not dx and not dy: return
+        h, v = self.horizontalScrollBar(), self.verticalScrollBar()
+        previous = (h.value(), v.value()); h.setValue(h.value()+dx); v.setValue(v.value()+dy)
+        if previous != (h.value(), v.value()):
+            pos = self.drag_position
+            event = QMouseEvent(QEvent.Type.MouseMove, pos, self.viewport().mapToGlobal(pos.toPoint()),
+                                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            QApplication.sendEvent(self.viewport(), event)
+
+
+class PairDialog(QDialog):
+    def __init__(self, parent, names):
+        super().__init__(parent); self.names = names; self.groups = None
+        self.setWindowTitle('配置批量配对'); self.resize(650, 420)
+        box = QVBoxLayout(self)
+        box.addWidget(QLabel(f'已选 {len(names)} 张图片，按文件名自然排序。序号以当前选择的第一张为第 1 张。'))
+        self.mode = QComboBox()
+        self.mode.addItems(['抽取指定组后相邻配对', '按步长分组，各组分别配对并输出', '固定间隔分块配对'])
+        box.addWidget(self.mode)
+        self.step = QSpinBox(); self.step.setRange(1, max(1, len(names)//2)); self.step.setPrefix('步长 / 间隔：'); self.step.setValue(1); box.addWidget(self.step)
+        self.offset = QSpinBox(); self.offset.setRange(1, 1); self.offset.setPrefix('选择第几组（从 1 开始）：'); box.addWidget(self.offset)
+        self.threshold = QSpinBox(); self.threshold.setRange(0, 255); self.threshold.setValue(129); self.threshold.setPrefix('二值化阈值：'); box.addWidget(self.threshold)
+        box.addWidget(QLabel('配对预览（每组展示前 4 对；计算前请核对）：'))
+        self.preview = QTextEdit(); self.preview.setReadOnly(True); box.addWidget(self.preview)
+        buttons = QHBoxLayout(); run = QPushButton('开始计算'); cancel = QPushButton('取消')
+        run.clicked.connect(self.confirm); cancel.clicked.connect(self.reject); buttons.addWidget(run); buttons.addWidget(cancel); box.addLayout(buttons)
+        self.mode.currentIndexChanged.connect(self.refresh); self.step.valueChanged.connect(self.refresh); self.offset.valueChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self):
+        self.offset.setMaximum(self.step.value()); self.offset.setEnabled(self.mode.currentIndex() == 0)
+        modes = ['subset', 'groups', 'distance']
+        try:
+            self.groups = make_pair_groups(len(self.names), self.step.value(), modes[self.mode.currentIndex()], self.offset.value()-1)
+            lines = []
+            for i, group in enumerate(self.groups):
+                examples = '；'.join(f'{self.names[a]} ↔ {self.names[b]}' for a, b in group[:4])
+                lines.append(f'第 {i+1} 组：{len(group)} 对\n{examples}')
+            self.preview.setPlainText('\n\n'.join(lines))
+        except ValueError as exc:
+            self.groups = None; self.preview.setPlainText('无法配对：' + str(exc))
+
+    def confirm(self):
+        if self.groups is None:
+            QMessageBox.warning(self, '配对设置无效', '请先调整设置，使每组都能完整配对。'); return
+        self.accept()
+
 
 class Main(QMainWindow):
     def __init__(self):
@@ -215,9 +294,9 @@ class Main(QMainWindow):
         self.tip = QLabel(None, Qt.WindowType.ToolTip); self.tip.setStyleSheet('background:#111;padding:6px;')
         panel = QWidget(); self.setCentralWidget(panel); layout = QVBoxLayout(panel)
         title = QLabel('图片隐写工作台'); title.setStyleSheet('font-size:23px;font-weight:700;'); layout.addWidget(title)
-        layout.addWidget(QLabel('空白处拖动框选图片或 + · 拖动移动 · 双击图片分析 · Ctrl+A 全选'))
+        layout.addWidget(QLabel('空白处拖动框选，靠近边缘自动滚动 · 图片可拖动，+ 自动居中 · 双击图片分析'))
         toolbar = QHBoxLayout()
-        for text, func in [('导入图片', self.browse), ('创建配对 +', self.create_pairs), ('对选中 + 执行 XOR', self.apply_xor), ('选中图片：相邻 XOR 平均', self.average_selected), ('图形工作流', self.workflow), ('从文件批量处理', self.average)]:
+        for text, func in [('导入图片', self.browse), ('创建配对 +', self.create_pairs), ('对选中 + 执行 XOR', self.apply_xor), ('选中图片：批量 XOR 平均', self.average_selected), ('图形工作流', self.workflow), ('从文件批量处理', self.average)]:
             button = QPushButton(text); button.clicked.connect(func); toolbar.addWidget(button)
         toolbar.addStretch(); layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
@@ -258,8 +337,6 @@ class Main(QMainWindow):
 
     def create_operation(self, sources):
         op = Operation(self, sources); self.canvas.scene().addItem(op); self.operations.append(op)
-        center = sum((c.scenePos().x() for c in sources), 0) / len(sources)
-        op.setPos(center + 80, max(c.scenePos().y() for c in sources) + 20)
         op.update_paths(); return op
 
     def create_pairs(self):
@@ -294,25 +371,28 @@ class Main(QMainWindow):
 
     def average_selected(self):
         cards = self.selected_cards()
-        if len(cards) < 2 or len(cards) % 2:
-            QMessageBox.information(self, '选择图片', '请先框选偶数张图片，至少两张。'); return
-        threshold, ok = QInputDialog.getInt(self, '相邻配对与平均', f'已选 {len(cards)} 张，将按文件名自然排序，依次配对 1–2、3–4……\n灰度值大于或等于该值为白色：', 129, 0, 255)
-        if not ok: return
+        if len(cards) < 2:
+            QMessageBox.information(self, '选择图片', '请先框选至少两张图片。'); return
+        self.run_batch([c.title for c in cards], lambda index: cards[index].image)
+
+    def run_batch(self, names, get_image):
+        dialog = PairDialog(self, names)
+        if dialog.exec() != QDialog.DialogCode.Accepted: return
         try:
-            self.add_card(self.selected_pair_average(threshold), '相邻帧 XOR 平均')
-            self.statusBar().showMessage(f'已完成 {len(cards)//2} 对图片的 XOR 平均')
+            results = []
+            for group in dialog.groups:
+                frames = [get_image(index) for pair in group for index in pair]
+                result = pair_xor_average(frames, dialog.threshold.value())
+                results.append(np.array(Image.fromarray(result).convert('RGBA')))
+            for i, result in enumerate(results): self.add_card(result, f'第{i+1}组 XOR 平均')
+            self.statusBar().showMessage(f'已完成 {len(results)} 组、{sum(map(len, dialog.groups))} 对图片')
         except Exception as e: QMessageBox.warning(self, '处理失败', str(e))
 
     def average(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, '按文件名顺序选择偶数张图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.tif *.tiff)')
+        paths, _ = QFileDialog.getOpenFileNames(self, '选择图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.tif *.tiff)')
         if not paths: return
-        threshold, ok = QInputDialog.getInt(self, '统一阈值', '灰度值大于或等于该值视为白色：', 129, 0, 255)
-        if not ok: return
-        try:
-            frames = [load_image(p) for p in sorted(paths, key=lambda p: natural_key(Path(p).name))]
-            result = pair_xor_average(frames, threshold)
-            self.add_card(np.array(Image.fromarray(result).convert('RGBA')), '相邻帧 XOR 平均')
-        except Exception as e: QMessageBox.warning(self, '处理失败', str(e))
+        paths = sorted(paths, key=lambda p: natural_key(Path(p).name))
+        self.run_batch([Path(p).name for p in paths], lambda index: load_image(paths[index]))
 
     def xor(self):
         selected = [c for c in self.cards if c.isSelected()]

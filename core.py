@@ -3,6 +3,25 @@ import numpy as np
 from PIL import Image
 
 
+def make_pair_groups(count, step=1, mode='subset', offset=0):
+    if count < 2 or step < 1 or offset < 0 or offset >= step:
+        raise ValueError('图片数量、步长或组号无效。')
+    if mode == 'distance':
+        if count % (step * 2):
+            raise ValueError('指定间隔配对要求图片数为间隔的两倍的整数倍，避免遗漏图片。')
+        return [[(base + i, base + step + i) for base in range(0, count, step * 2) for i in range(step)]]
+    if mode not in ('subset', 'groups'):
+        raise ValueError('不支持的配对方式。')
+    offsets = range(step) if mode == 'groups' else [offset]
+    groups = []
+    for start in offsets:
+        indexes = list(range(start, count, step))
+        if len(indexes) < 2 or len(indexes) % 2:
+            raise ValueError(f'第 {start + 1} 组有 {len(indexes)} 张图片，必须为至少 2 张的偶数，请调整范围或步长。')
+        groups.append(list(zip(indexes[::2], indexes[1::2])))
+    return groups
+
+
 def load_image(path):
     with Image.open(path) as image:
         return np.array(image.convert('RGBA'), dtype=np.uint8)
