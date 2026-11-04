@@ -176,5 +176,34 @@ class CanvasTests(unittest.TestCase):
         next(action for action in single.actions() if action.text() == '反色').trigger()
         self.assertEqual(w.cards[-1].image[0, 0].tolist(), [245, 235, 225, 255]); w.close()
 
+    def test_canvas_zoom_shortcuts_and_limits(self):
+        w = Main(); w.show(); w.activateWindow(); w.canvas.setFocus(); self.app.processEvents()
+        before = w.canvas.transform().m11()
+        QTest.keyClick(w.canvas, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier)
+        self.assertGreater(w.canvas.transform().m11(), before)
+        QTest.keyClick(w.canvas, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
+        self.assertAlmostEqual(w.canvas.transform().m11(), before)
+        for _ in range(50): w.canvas.zoom(1.25)
+        self.assertLessEqual(w.canvas.transform().m11(), 4.0)
+        QTest.keyClick(w.canvas, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        self.assertAlmostEqual(w.canvas.transform().m11(), 1.0)
+        QTest.keyClick(w.canvas, Qt.Key.Key_Plus, Qt.KeyboardModifier.ControlModifier)
+        self.assertGreater(w.canvas.transform().m11(), 1.0)
+        w.close()
+
+    def test_zoomed_rubberband_selects_cards_and_keeps_pixels(self):
+        w = Main(); w.show(); self.app.processEvents()
+        a = w.add_card(np.full((10, 10, 4), [1, 2, 3, 255], dtype=np.uint8), 'a')
+        b = w.add_card(np.full((10, 10, 4), [4, 5, 6, 255], dtype=np.uint8), 'b')
+        w.canvas.setTransformationAnchor(w.canvas.ViewportAnchor.NoAnchor); w.canvas.zoom(1.25)
+        w.canvas.horizontalScrollBar().setValue(0); w.canvas.verticalScrollBar().setValue(0)
+        view = w.canvas.viewport(); start = QPointF(w.canvas.mapFromScene(5, 5)); end = QPointF(w.canvas.mapFromScene(230, 120))
+        for kind, pos, button, buttons in [(QEvent.Type.MouseButtonPress, start, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton),
+                (QEvent.Type.MouseMove, end, Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton),
+                (QEvent.Type.MouseButtonRelease, end, Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton)]:
+            self.app.sendEvent(view, QMouseEvent(kind, pos, pos, button, buttons, Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(len(w.selected_cards()), 2)
+        self.assertEqual(a.image[0, 0].tolist(), [1, 2, 3, 255]); w.close()
+
 
 if __name__ == '__main__': unittest.main()

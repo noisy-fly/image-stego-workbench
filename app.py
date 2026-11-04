@@ -223,10 +223,20 @@ class Canvas(QGraphicsView):
         self.setSceneRect(0, 0, 3000, 2000)
         self.setStyleSheet('background:#1a202c; border:0;')
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.auto_timer = QTimer(self); self.auto_timer.setInterval(25); self.auto_timer.timeout.connect(self.auto_scroll)
         self.drag_position = None
         self.move_before = None; self.move_positions = None
         QTimer.singleShot(0, lambda: (self.horizontalScrollBar().setValue(0), self.verticalScrollBar().setValue(0)))
+
+    def zoom(self, factor):
+        current = self.transform().m11()
+        target = max(0.2, min(4.0, current * factor))
+        self.scale(target / current, target / current)
+        self.owner.statusBar().showMessage(f'画布缩放：{round(target * 100)}%')
+
+    def reset_zoom(self):
+        self.resetTransform(); self.owner.statusBar().showMessage('画布缩放：100%')
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
@@ -318,43 +328,75 @@ class Main(QMainWindow):
         self.undo_stack = []; self.redo_stack = []; self.clipboard_cards = []; self.clipboard_token = ''
         self.tip = QLabel(None, Qt.WindowType.ToolTip); self.tip.setStyleSheet('background:#111;padding:6px;')
         panel = QWidget(); self.setCentralWidget(panel); layout = QVBoxLayout(panel)
-        title = QLabel('图片隐写工作台'); title.setStyleSheet('font-size:23px;font-weight:700;'); layout.addWidget(title)
-        layout.addWidget(QLabel('空白处拖动框选，靠近边缘自动滚动 · 图片可拖动，+ 自动居中 · 双击图片分析'))
+        title = QLabel('图片隐写工作台'); title.setStyleSheet('font-size:17pt;font-weight:700;'); layout.addWidget(title)
+        layout.addWidget(QLabel('拖动框选 · 双击图片分析 · Ctrl + / − 缩放画布'))
         toolbar = QHBoxLayout()
-        for text, func in [('导入图片', self.browse), ('创建配对 +', self.create_pairs), ('对选中 + 执行 XOR', self.apply_xor), ('选中图片：批量 XOR 平均', self.average_selected), ('图形工作流', self.workflow), ('从文件批量处理', self.average)]:
-            button = QPushButton(text); button.clicked.connect(func); toolbar.addWidget(button)
-        module_button = QPushButton('处理模块 ▾'); module_button.setMenu(self.module_menu()); toolbar.addWidget(module_button)
-        toolbar.addStretch(); layout.addLayout(toolbar)
+        for text, func in [('导入图片', self.browse), ('单图分析', self.open_analysis), ('创建配对 +', self.create_pairs)]:
+            button = QPushButton(text); button.clicked.connect(func); toolbar.addWidget(button, 1)
+        for text, menu in [('单图处理', self.single_menu()), ('双图组合', self.combine_menu()),
+                           ('多图统计', self.statistics_menu()), ('更多工具', self.more_menu())]:
+            button = QPushButton(text); button.setMenu(menu); toolbar.addWidget(button, 1)
+        layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
         self.statusBar().showMessage('准备就绪')
         for key, callback in [('Ctrl+A', self.select_all), ('Ctrl+C', self.copy_selection), ('Ctrl+V', self.paste_selection),
-                              ('Ctrl+Z', self.undo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+Y', self.redo), ('Delete', self.delete_selection)]:
+                              ('Ctrl+Z', self.undo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+Y', self.redo), ('Delete', self.delete_selection),
+                              ('Ctrl++', lambda: self.canvas.zoom(1.25)), ('Ctrl+=', lambda: self.canvas.zoom(1.25)),
+                              ('Ctrl+-', lambda: self.canvas.zoom(0.8)), ('Ctrl+0', self.canvas.reset_zoom)]:
             action = QAction(self); action.setShortcut(key); action.triggered.connect(callback); self.addAction(action)
 
-    def module_menu(self):
-        menu = QMenu(self)
-        def add(parent, text, callback):
-            action = parent.addAction(text); action.triggered.connect(callback)
-        single = menu.addMenu('单图处理（选中图片）')
+    @staticmethod
+    def add_menu_action(parent, text, callback):
+        action = parent.addAction(text); action.triggered.connect(callback)
+
+    def single_menu(self):
+        single = QMenu('单图处理（选中图片）', self); add = self.add_menu_action
         for label, key in [('灰度', 'gray'), ('反色', 'invert'), ('水平翻转', 'flip_h'), ('垂直翻转', 'flip_v'),
                            ('顺时针旋转 90°', 'rotate_cw'), ('逆时针旋转 90°', 'rotate_ccw'),
                            ('自动对比度', 'contrast'), ('直方图均衡', 'equalize'), ('边缘检测', 'edges')]:
             add(single, label, lambda checked=False, k=key, name=label: self.apply_single(k, name))
         add(single, '阈值二值化…', self.ask_threshold)
         add(single, '高斯模糊…', self.ask_blur)
-        channel_menu = single.addMenu('查看颜色 / 透明通道')
-        for i, name in enumerate(('红', '绿', '蓝', '透明度')):
-            add(channel_menu, name, lambda checked=False, c=i, label=name: self.apply_single('channel', label+'通道', component=c))
+        add(single, '批量提取通道…', self.ask_channel)
         add(single, '查看某个位平面…', self.ask_plane)
-        combine = menu.addMenu('双图组合（选中 + 节点）')
+        return single
+
+    def combine_menu(self):
+        combine = QMenu('双图组合（选中 + 节点）', self); add = self.add_menu_action
         for label, key in [('按位异或 XOR', 'xor'), ('按位与 AND', 'and'), ('按位或 OR', 'or'),
                            ('绝对差值', 'difference'), ('相加（溢出回绕）', 'add'),
                            ('相减（前图减后图，溢出回绕）', 'subtract'), ('两图平均', 'mean')]:
             add(combine, label, lambda checked=False, k=key, name=label: self.apply_combine(k, name))
-        multi = menu.addMenu('多图统计（选中图片）')
+        return combine
+
+    def statistics_menu(self):
+        multi = QMenu('多图统计（选中图片）', self); add = self.add_menu_action
         for label, key in [('逐像素平均', 'mean'), ('逐像素最小值', 'min'), ('逐像素最大值', 'max')]:
             add(multi, label, lambda checked=False, k=key, name=label: self.apply_aggregate(k, name))
+        add(multi, '配对 XOR 后平均…', self.average_selected)
+        return multi
+
+    def more_menu(self):
+        menu = QMenu('更多工具', self)
+        self.add_menu_action(menu, '图形工作流', self.workflow)
+        self.add_menu_action(menu, '从文件批量配对并平均…', self.average)
         return menu
+
+    def module_menu(self):
+        menu = QMenu(self)
+        for submenu in (self.single_menu(), self.combine_menu(), self.statistics_menu()): menu.addMenu(submenu)
+        return menu
+
+    def open_analysis(self):
+        cards = self.selected_cards()
+        if len(cards) != 1:
+            QMessageBox.information(self, '单图分析', '请选择一张图片，或直接双击图片。'); return
+        Analysis(self, cards[0].image, cards[0].title).exec()
+
+    def ask_channel(self):
+        labels = ['红', '绿', '蓝', '透明度']
+        name, ok = QInputDialog.getItem(self, '批量提取通道', '选择要生成的灰度通道：', labels, 0, False)
+        if ok: self.apply_single('channel', name + '通道', component=labels.index(name))
 
     def ask_threshold(self):
         value, ok = QInputDialog.getInt(self, '阈值二值化', '灰度值大于或等于阈值为白色：', 129, 0, 255)
@@ -607,7 +649,7 @@ class Main(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyleSheet('QWidget {font-family: "Microsoft YaHei UI"; font-size: 13px;} QPushButton {padding: 8px 14px;}')
+    app.setStyleSheet('QWidget {font-family: "Microsoft YaHei UI"; font-size: 10pt;} QPushButton {padding: 8px 14px;}')
     window = Main(); window.show(); sys.exit(app.exec())
 
 
