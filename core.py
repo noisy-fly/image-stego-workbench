@@ -98,10 +98,14 @@ def aggregate_images(images, operation):
     return result
 
 
-def extract_bits(image, components, bits, column_first=False, lsb_first=False):
-    source = image.transpose(1, 0, 2) if column_first else image
+def extract_bits(image, components, bits, column_first=False, lsb_first=False,
+                 reverse_x=False, reverse_y=False, bit_offset=0):
+    if not components or not bits or bit_offset < 0: raise ValueError('请选择通道、位，且跳过位数不能为负数。')
+    source = image[::-1 if reverse_y else 1, ::-1 if reverse_x else 1]
+    if column_first: source = source.transpose(1, 0, 2)
     pixels = source.reshape(-1, source.shape[2])
     values = np.stack([(pixels[:, c] >> b) & 1 for c in components for b in bits], axis=1).reshape(-1)
+    values = values[bit_offset:]
     values = values[:len(values) // 8 * 8]
     return np.packbits(values, bitorder='little' if lsb_first else 'big').tobytes()
 

@@ -27,4 +27,14 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(aggregate_images([self.a, self.b], 'min')[0, 0].tolist(), [10, 2, 4, 255])
         with self.assertRaises(ValueError): aggregate_images([self.a, self.b[:, :1]], 'mean')
 
+    def test_every_registered_single_operation(self):
+        for op in ['gray', 'invert', 'flip_h', 'flip_v', 'rotate_cw', 'rotate_ccw', 'contrast', 'equalize', 'edges', 'blur']:
+            with self.subTest(op=op):
+                result = process_image(self.a, op)
+                self.assertEqual(result.dtype, np.uint8)
+                self.assertEqual(result.shape[2], 4)
+        for op in ['xor', 'and', 'or', 'add', 'subtract', 'difference', 'mean']:
+            with self.subTest(op=op):
+                self.assertEqual(combine_images(self.a, self.b, op).shape, self.a.shape)
+
 if __name__ == '__main__': unittest.main()

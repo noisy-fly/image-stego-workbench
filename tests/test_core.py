@@ -21,6 +21,8 @@ class ImageAnalysisTests(unittest.TestCase):
         pixels = np.zeros((1, 8, 4), dtype=np.uint8)
         pixels[0, :, 0] = [0, 1, 0, 0, 0, 0, 0, 1]
         self.assertEqual(extract_bits(pixels, [0], [0]), b'A')
+        self.assertEqual(extract_bits(pixels, [0], [0], reverse_x=True), b'\x82')
+        self.assertEqual(extract_bits(pixels, [0], [0], bit_offset=1), b'')
 
     def test_pair_xor_average(self):
         frames = [np.array([[x]], dtype=np.uint8) for x in (0, 255, 0, 0)]

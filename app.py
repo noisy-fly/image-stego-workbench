@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QSplitter, QSpinBox, QComboBox, QCheckBox, QTextEdit, QInputDialog,
     QGraphicsEllipseItem, QGraphicsPathItem)
 from PySide6.QtGui import QIcon
-from core import load_image, bit_plane, channel, invert, extract_bits, pair_xor_average, make_pair_groups
+from core import (load_image, bit_plane, channel, invert, extract_bits, pair_xor_average,
+                  make_pair_groups, process_image, combine_images, aggregate_images)
 
 
 def natural_key(value):
@@ -93,7 +94,7 @@ class Analysis(QDialog):
         dialog.setWindowTitle('提取像素位数据')
         dialog.resize(700, 500)
         box = QVBoxLayout(dialog)
-        box.addWidget(QLabel('选择通道与位：按所选通道顺序依次读取每个像素。'))
+        box.addWidget(QLabel('选择通道和位：每个像素按 R→G→B→A、低位→高位的顺序读取。'))
         row = QHBoxLayout()
         checks = []
         for name in 'RGBA':
@@ -102,16 +103,24 @@ class Analysis(QDialog):
             row.addWidget(c)
             checks.append(c)
         box.addLayout(row)
-        bit = QSpinBox(); bit.setRange(0, 7); bit.setPrefix('位：'); box.addWidget(bit)
+        bit_row = QHBoxLayout(); bit_checks = []
+        for i in range(8):
+            check = QCheckBox(f'第{i}位'); check.setChecked(i == 0); bit_checks.append(check); bit_row.addWidget(check)
+        box.addLayout(bit_row)
         column = QCheckBox('按列扫描（默认按行）'); box.addWidget(column)
+        reverse_x = QCheckBox('水平反向扫描（从右向左）'); box.addWidget(reverse_x)
+        reverse_y = QCheckBox('垂直反向扫描（从下向上）'); box.addWidget(reverse_y)
         little = QCheckBox('每字节低位先写入'); box.addWidget(little)
+        offset = QSpinBox(); offset.setRange(0, 1000000000); offset.setPrefix('跳过前面的位数：'); box.addWidget(offset)
         output = QTextEdit(); output.setReadOnly(True); box.addWidget(output)
         data = [b'']
         def run():
             components = [i for i, c in enumerate(checks) if c.isChecked()]
-            if not components:
-                QMessageBox.warning(dialog, '提示', '请至少选择一个通道。'); return
-            data[0] = extract_bits(self.image, components, [bit.value()], column.isChecked(), little.isChecked())
+            bits = [i for i, c in enumerate(bit_checks) if c.isChecked()]
+            if not components or not bits:
+                QMessageBox.warning(dialog, '提示', '请至少选择一个通道和一个位。'); return
+            data[0] = extract_bits(self.image, components, bits, column.isChecked(), little.isChecked(),
+                                   reverse_x.isChecked(), reverse_y.isChecked(), offset.value())
             sample = data[0][:4096]
             output.setPlainText('前 4096 字节（十六进制）：\n' + sample.hex(' ') + '\n\n文本预览：\n' + sample.decode('utf-8', errors='replace'))
         def export():
@@ -152,6 +161,9 @@ class Card(QGraphicsPixmapItem):
     def contextMenuEvent(self, event):
         self.timer.stop(); self.owner.tip.hide()
         menu = QMenu(); menu.addAction('打开图片分析', lambda: Analysis(self.owner, self.image, self.title).exec())
+        if not self.isSelected():
+            self.owner.canvas.scene().clearSelection(); self.setSelected(True)
+        modules = self.owner.module_menu(); modules.setTitle('处理模块'); menu.addMenu(modules)
         menu.addAction('保存图片', lambda: save_image(self.owner, self.image))
         menu.addAction('从画布移除', lambda: self.owner.remove_card(self))
         menu.exec(event.screenPos())
@@ -311,12 +323,75 @@ class Main(QMainWindow):
         toolbar = QHBoxLayout()
         for text, func in [('导入图片', self.browse), ('创建配对 +', self.create_pairs), ('对选中 + 执行 XOR', self.apply_xor), ('选中图片：批量 XOR 平均', self.average_selected), ('图形工作流', self.workflow), ('从文件批量处理', self.average)]:
             button = QPushButton(text); button.clicked.connect(func); toolbar.addWidget(button)
+        module_button = QPushButton('处理模块 ▾'); module_button.setMenu(self.module_menu()); toolbar.addWidget(module_button)
         toolbar.addStretch(); layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
         self.statusBar().showMessage('准备就绪')
         for key, callback in [('Ctrl+A', self.select_all), ('Ctrl+C', self.copy_selection), ('Ctrl+V', self.paste_selection),
                               ('Ctrl+Z', self.undo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+Y', self.redo), ('Delete', self.delete_selection)]:
             action = QAction(self); action.setShortcut(key); action.triggered.connect(callback); self.addAction(action)
+
+    def module_menu(self):
+        menu = QMenu(self)
+        def add(parent, text, callback):
+            action = parent.addAction(text); action.triggered.connect(callback)
+        single = menu.addMenu('单图处理（选中图片）')
+        for label, key in [('灰度', 'gray'), ('反色', 'invert'), ('水平翻转', 'flip_h'), ('垂直翻转', 'flip_v'),
+                           ('顺时针旋转 90°', 'rotate_cw'), ('逆时针旋转 90°', 'rotate_ccw'),
+                           ('自动对比度', 'contrast'), ('直方图均衡', 'equalize'), ('边缘检测', 'edges')]:
+            add(single, label, lambda checked=False, k=key, name=label: self.apply_single(k, name))
+        add(single, '阈值二值化…', self.ask_threshold)
+        add(single, '高斯模糊…', self.ask_blur)
+        channel_menu = single.addMenu('查看颜色 / 透明通道')
+        for i, name in enumerate(('红', '绿', '蓝', '透明度')):
+            add(channel_menu, name, lambda checked=False, c=i, label=name: self.apply_single('channel', label+'通道', component=c))
+        add(single, '查看某个位平面…', self.ask_plane)
+        combine = menu.addMenu('双图组合（选中 + 节点）')
+        for label, key in [('按位异或 XOR', 'xor'), ('按位与 AND', 'and'), ('按位或 OR', 'or'),
+                           ('绝对差值', 'difference'), ('相加（溢出回绕）', 'add'),
+                           ('相减（前图减后图，溢出回绕）', 'subtract'), ('两图平均', 'mean')]:
+            add(combine, label, lambda checked=False, k=key, name=label: self.apply_combine(k, name))
+        multi = menu.addMenu('多图统计（选中图片）')
+        for label, key in [('逐像素平均', 'mean'), ('逐像素最小值', 'min'), ('逐像素最大值', 'max')]:
+            add(multi, label, lambda checked=False, k=key, name=label: self.apply_aggregate(k, name))
+        return menu
+
+    def ask_threshold(self):
+        value, ok = QInputDialog.getInt(self, '阈值二值化', '灰度值大于或等于阈值为白色：', 129, 0, 255)
+        if ok: self.apply_single('threshold', f'二值化 {value}', threshold=value)
+
+    def ask_blur(self):
+        value, ok = QInputDialog.getDouble(self, '高斯模糊', '模糊半径（像素）：', 1.0, 0, 100, 1)
+        if ok: self.apply_single('blur', f'高斯模糊 {value}', radius=value)
+
+    def ask_plane(self):
+        labels = ['红', '绿', '蓝', '透明度']
+        name, ok = QInputDialog.getItem(self, '位平面', '选择通道：', labels, 0, False)
+        if not ok: return
+        bit, ok = QInputDialog.getInt(self, '位平面', '选择位（0 是最低位）：', 0, 0, 7)
+        if ok: self.apply_single('plane', f'{name}通道第{bit}位', component=labels.index(name), bit=bit)
+
+    def apply_single(self, operation, label, **options):
+        cards = self.selected_cards()
+        if not cards:
+            QMessageBox.information(self, '选择图片', '请先选择一张或多张图片。'); return
+        try: results = [process_image(card.image, operation, **options) for card in cards]
+        except Exception as exc: QMessageBox.warning(self, '处理失败', str(exc)); return
+        before = self.snapshot(); self.canvas.scene().clearSelection()
+        for card, result in zip(cards, results):
+            op = self.create_operation([card]); out = self.add_card(result, label + ' 结果')
+            op.output = out; out.links.append(op); op.update_paths(); out.setSelected(True)
+        self.remember(before); self.statusBar().showMessage(f'{label}：已处理 {len(results)} 张图片')
+
+    def apply_aggregate(self, operation, label):
+        cards = self.selected_cards()
+        if len(cards) < 2:
+            QMessageBox.information(self, '选择图片', '请先选择至少两张图片。'); return
+        try: result = aggregate_images([c.image for c in cards], operation)
+        except Exception as exc: QMessageBox.warning(self, '处理失败', str(exc)); return
+        before = self.snapshot(); self.canvas.scene().clearSelection()
+        result_card = self.add_card(result, label + ' 结果'); result_card.setSelected(True)
+        self.remember(before); self.statusBar().showMessage(f'{label}：已统计 {len(cards)} 张图片')
 
     def snapshot(self):
         indices = {card: i for i, card in enumerate(self.cards)}
@@ -446,9 +521,6 @@ class Main(QMainWindow):
             QMessageBox.information(self, '创建配对', '请先框选至少两张图片。'); return
         dialog = PairDialog(self, [c.title for c in cards], graph=True)
         if dialog.exec() != QDialog.DialogCode.Accepted: return
-        chosen = [cards[i] for group in dialog.groups for pair in group for i in pair]
-        if any(card.links for card in chosen):
-            QMessageBox.information(self, '已有连接', '所选图片中已有连接，请先删除对应节点或复制图片再创建配对。'); return
         self.make_pairs(cards, dialog.groups)
 
     def make_pairs(self, cards, groups):
@@ -469,6 +541,9 @@ class Main(QMainWindow):
         self.statusBar().showMessage(f'已创建 {len(pairs)} 个待处理节点；框选 + 后选择操作')
 
     def apply_xor(self):
+        self.apply_combine('xor', 'XOR')
+
+    def apply_combine(self, operation, label):
         operations = [op for op in self.operations if op.isSelected()]
         if not operations:
             QMessageBox.information(self, '选择处理节点', '请先框选一个或多个 + 节点。'); return
@@ -481,11 +556,11 @@ class Main(QMainWindow):
                 QMessageBox.warning(self, '尺寸不一致', '选中节点中的图片尺寸不一致，未执行任何操作。'); return
         for op in operations:
             a, b = (c.image for c in op.sources)
-            result = np.bitwise_xor(a, b); result[:, :, 3] = 255
-            out = self.add_card(result, 'XOR 结果'); out.setPos(op.pos() + QPointF(100, 0))
+            result = combine_images(a, b, operation)
+            out = self.add_card(result, label + ' 结果'); out.setPos(op.pos() + QPointF(100, 0))
             op.output = out; out.links.append(op); op.update_paths()
         self.remember(before)
-        self.statusBar().showMessage(f'已完成 {len(operations)} 个 XOR')
+        self.statusBar().showMessage(f'已完成 {len(operations)} 个{label}')
 
     def selected_pair_average(self, threshold):
         cards = self.selected_cards()

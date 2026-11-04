@@ -132,5 +132,49 @@ class CanvasTests(unittest.TestCase):
         self.assertEqual(len(w.cards), 2)
         QApplication.clipboard().clear(); w.close()
 
+    def test_process_selected_and_undo(self):
+        w = Main(); card = w.add_card(np.full((2, 2, 4), [1, 2, 3, 255], dtype=np.uint8), 'a')
+        card.setSelected(True); w.apply_single('invert', '反色')
+        self.assertEqual(w.cards[-1].image[0, 0].tolist(), [254, 253, 252, 255])
+        self.assertEqual(len(w.operations), 1)
+        w.undo(); self.assertEqual((len(w.cards), len(w.operations)), (1, 0))
+        w.redo(); self.assertEqual((len(w.cards), len(w.operations)), (2, 1))
+        w.close()
+
+    def test_batch_plus_combine(self):
+        w = Main()
+        a = w.add_card(np.full((2, 2, 4), [1, 3, 5, 255], dtype=np.uint8), 'a')
+        b = w.add_card(np.full((2, 2, 4), [3, 1, 7, 255], dtype=np.uint8), 'b')
+        op = w.create_operation([a, b]); op.setSelected(True); w.apply_combine('and', '按位与')
+        self.assertEqual(w.cards[-1].image[0, 0].tolist(), [1, 1, 5, 255])
+        w.undo(); self.assertEqual((len(w.cards), len(w.operations)), (2, 1))
+        self.assertIsNone(w.operations[0].output); w.close()
+
+    def test_pair_existing_result_and_undo(self):
+        w = Main()
+        a = w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), 'a')
+        b = w.add_card(np.full((2, 2, 4), 255, dtype=np.uint8), 'b')
+        op = w.create_operation([a, b]); op.setSelected(True); w.apply_xor()
+        result = op.output
+        w.make_pairs([result, b], [[(0, 1)]])
+        self.assertEqual(len(w.operations), 2)
+        self.assertIn(op, result.links)
+        w.undo(); self.assertEqual(len(w.operations), 1); self.assertIsNotNone(w.operations[0].output)
+        w.close()
+
+    def test_aggregate_and_undo(self):
+        w = Main()
+        for v in [20, 40, 120]:
+            c = w.add_card(np.full((2, 2, 4), v, dtype=np.uint8), str(v)); c.setSelected(True)
+        w.apply_aggregate('mean', '平均')
+        self.assertEqual(w.cards[-1].image[0, 0].tolist(), [60, 60, 60, 255])
+        w.undo(); self.assertEqual(len(w.cards), 3); w.close()
+
+    def test_menu_dispatches_correct_operation(self):
+        w = Main(); c = w.add_card(np.array([[[10, 20, 30, 255]]], dtype=np.uint8), 'a'); c.setSelected(True)
+        menu = w.module_menu(); single = menu.actions()[0].menu()
+        next(action for action in single.actions() if action.text() == '反色').trigger()
+        self.assertEqual(w.cards[-1].image[0, 0].tolist(), [245, 235, 225, 255]); w.close()
+
 
 if __name__ == '__main__': unittest.main()
