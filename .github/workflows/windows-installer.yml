@@ -31,7 +31,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "测试失败: $($_.Name)" }
           }
       - name: 打包 Windows 程序
-        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow app.py
+        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas app.py
       - name: 编译中文安装向导
         shell: pwsh
         run: |

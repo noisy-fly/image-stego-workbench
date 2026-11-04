@@ -594,7 +594,7 @@ class Main(QMainWindow):
         self.load_paths(paths)
 
     def workflow(self):
-        from workflow import Workflow
+        from workflow_canvas import Workflow
         Workflow(self).exec()
 
     def load_paths(self, paths):
@@ -730,7 +730,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet('QWidget {font-family: "Microsoft YaHei UI"; font-size: 10pt;} QPushButton {padding: 8px 14px;}')
     if '--smoke-test' in sys.argv:
-        from workflow import Workflow
+        from workflow_canvas import Workflow
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window)
