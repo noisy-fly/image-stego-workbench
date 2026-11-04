@@ -4,7 +4,7 @@
 
 ## 启动
 
-Windows 64 位用户可在 [Releases 下载页面](https://github.com/noisy-fly/image-stego-workbench/releases) 选择预览版，下载附件 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
+Windows 64 位用户可在 [Releases 下载页面](https://github.com/noisy-fly/image-stego-workbench/releases/latest) 下载附件 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
 
 从源码运行需要 Python 3、PySide6、Pillow 和 NumPy。安装依赖后双击 `启动.bat`，或者在此目录运行 `py -3 app.py`。
 
@@ -55,4 +55,4 @@ LSB 快速检查是有限范围筛查，仅读取像素前缀、从第一位开�
 
 ## 发布新版本
 
-推送 `v1.2.3` 或 `v1.2.3-rc.1` 形式的标签会触发 Windows 安装包构建；测试、安装和卸载验证通过后自动发布预览版，并附带 SHA-256 校验文件。安装程序显示数字版本号（例如 `1.2.3`），完整标签保留在 Release 页面。发布说明模板为 `.github/RELEASE_NOTES.md`。
+推送 `v1.2.3` 或 `v1.2.3-rc.1` 形式的标签会触发 Windows 安装包构建；测试、安装和卸载验证通过后自动发布并附带 SHA-256 校验文件。普通版本标签会设为最新版本；带 `-rc` 等后缀的标签标为预发布。安装程序显示数字版本号（例如 `1.2.3`），完整标签保留在 Release 页面。发布说明模板为 `.github/RELEASE_NOTES.md`。

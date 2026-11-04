@@ -80,5 +80,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME installer-output/StegoWorkbench-Setup.exe installer-output/SHA256.txt --verify-tag --prerelease --title "图片隐写工作台 $env:GITHUB_REF_NAME" --notes-file .github/RELEASE_NOTES.md
+          $releaseKind = if ($env:GITHUB_REF_NAME -match '-') { '--prerelease' } else { '--latest' }
+          gh release create $env:GITHUB_REF_NAME installer-output/StegoWorkbench-Setup.exe installer-output/SHA256.txt --verify-tag $releaseKind --title "图片隐写工作台 $env:GITHUB_REF_NAME" --notes-file .github/RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw '发布安装包失败' }
