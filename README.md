@@ -4,7 +4,9 @@
 
 ## 启动
 
-需要 Python 3、PySide6、Pillow 和 NumPy。安装依赖后双击 `启动.bat`，或者在此目录运行 `py -3 app.py`。程序本地处理图片。
+Windows 64 位用户可在仓库的 Releases 页面下载安装包 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
+
+从源码运行需要 Python 3、PySide6、Pillow 和 NumPy。安装依赖后双击 `启动.bat`，或者在此目录运行 `py -3 app.py`。
 
 ```powershell
 py -3 -m pip install -r requirements.txt

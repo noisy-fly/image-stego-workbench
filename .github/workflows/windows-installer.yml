@@ -1,0 +1,67 @@
+name: Windows 安装包
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: 获取源码
+        uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装依赖
+        run: python -m pip install -r requirements.txt pyinstaller==6.17.0
+      - name: 运行测试
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+      - name: 打包 Windows 程序
+        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow app.py
+      - name: 编译中文安装向导
+        shell: pwsh
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) { throw '找不到 Inno Setup 编译器' }
+          & $compiler packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw '安装包编译失败' }
+      - name: 安装与启动验证
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $installer = Join-Path $PWD 'installer-output/StegoWorkbench-Setup.exe'
+          $installDir = Join-Path $env:RUNNER_TEMP 'StegoWorkbenchInstallTest'
+          $dirArgument = '/DIR="' + $installDir + '"'
+          $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', $dirArgument) -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "安装失败，退出码 $($setup.ExitCode)" }
+          $executable = Join-Path $installDir 'StegoWorkbench.exe'
+          if (-not (Test-Path -LiteralPath $executable)) { throw '安装后找不到程序' }
+          $process = Start-Process -FilePath $executable -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "程序自检失败，退出码 $($process.ExitCode)" }
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "卸载验证失败，退出码 $($uninstall.ExitCode)" }
+          if (Test-Path -LiteralPath $executable) { throw '卸载后程序仍存在' }
+      - name: 生成校验值
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash installer-output/StegoWorkbench-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  StegoWorkbench-Setup.exe" | Set-Content -Encoding utf8 installer-output/SHA256.txt
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: StegoWorkbench-Windows-Installer
+          path: |
+            installer-output/StegoWorkbench-Setup.exe
+            installer-output/SHA256.txt
+          if-no-files-found: error
