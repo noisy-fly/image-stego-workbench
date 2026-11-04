@@ -41,7 +41,7 @@ jobs:
           $versionTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v0.1.0' }
           $version = python release_version.py $versionTag
           if ($LASTEXITCODE -ne 0) { throw '发行标签格式不正确' }
-          & $compiler "--define=AppVersion=$version" packaging/installer.iss
+          & $compiler "/DAppVersion=$version" packaging/installer.iss
           if ($LASTEXITCODE -ne 0) { throw '安装包编译失败' }
       - name: 安装与启动验证
         shell: pwsh
