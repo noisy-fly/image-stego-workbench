@@ -1,6 +1,6 @@
 """独立实现的像素分析操作；所有输入均为原始 8 位像素。"""
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 
 
 def make_pair_groups(count, step=1, mode='subset', offset=0):
@@ -38,6 +38,63 @@ def channel(image, component):
 def invert(image):
     result = image.copy()
     result[:, :, :3] = 255 - result[:, :, :3]
+    return result
+
+
+def as_rgba(gray):
+    return np.array(Image.fromarray(gray).convert('RGBA'))
+
+
+def process_image(image, operation, **options):
+    if operation == 'invert': return invert(image)
+    if operation == 'channel': return as_rgba(channel(image, options['component']))
+    if operation == 'plane': return as_rgba(bit_plane(image, options['component'], options['bit']))
+    if operation == 'gray': return as_rgba(np.asarray(Image.fromarray(image).convert('L')))
+    if operation == 'threshold':
+        gray = np.asarray(Image.fromarray(image).convert('L'))
+        return as_rgba((gray >= options['threshold']).astype(np.uint8) * 255)
+    if operation == 'flip_h': return np.ascontiguousarray(image[:, ::-1])
+    if operation == 'flip_v': return np.ascontiguousarray(image[::-1])
+    if operation == 'rotate_cw': return np.ascontiguousarray(np.rot90(image, -1))
+    if operation == 'rotate_ccw': return np.ascontiguousarray(np.rot90(image, 1))
+    if operation in ('contrast', 'equalize', 'blur', 'edges'):
+        rgb = Image.fromarray(image[:, :, :3])
+        if operation == 'contrast': rgb = ImageOps.autocontrast(rgb)
+        elif operation == 'equalize': rgb = ImageOps.equalize(rgb)
+        elif operation == 'blur': rgb = rgb.filter(ImageFilter.GaussianBlur(options.get('radius', 1)))
+        elif operation == 'edges': rgb = rgb.filter(ImageFilter.FIND_EDGES)
+        result = image.copy(); result[:, :, :3] = np.asarray(rgb); return result
+    raise ValueError('未知的单图操作。')
+
+
+def combine_images(first, second, operation):
+    if first.shape != second.shape: raise ValueError('图片尺寸必须一致。')
+    a, b = first[:, :, :3], second[:, :, :3]
+    if operation == 'xor': rgb = np.bitwise_xor(a, b)
+    elif operation == 'and': rgb = np.bitwise_and(a, b)
+    elif operation == 'or': rgb = np.bitwise_or(a, b)
+    elif operation == 'add': rgb = (a.astype(np.uint16) + b.astype(np.uint16)).astype(np.uint8)
+    elif operation == 'subtract': rgb = (a.astype(np.int16) - b.astype(np.int16)).astype(np.uint8)
+    elif operation == 'difference': rgb = np.abs(a.astype(np.int16) - b.astype(np.int16)).astype(np.uint8)
+    elif operation == 'mean': rgb = ((a.astype(np.uint16) + b.astype(np.uint16)) // 2).astype(np.uint8)
+    else: raise ValueError('未知的双图操作。')
+    result = np.empty_like(first); result[:, :, :3] = rgb; result[:, :, 3] = 255
+    return result
+
+
+def aggregate_images(images, operation):
+    if len(images) < 2: raise ValueError('至少需要两张图片。')
+    if any(im.shape != images[0].shape for im in images): raise ValueError('图片尺寸必须一致。')
+    if operation == 'mean':
+        total = np.zeros(images[0].shape[:2] + (3,), dtype=np.uint64)
+        for im in images: total += im[:, :, :3]
+        rgb = (total // len(images)).astype(np.uint8)
+    elif operation in ('min', 'max'):
+        rgb = images[0][:, :, :3].copy()
+        for im in images[1:]:
+            (np.minimum if operation == 'min' else np.maximum)(rgb, im[:, :, :3], out=rgb)
+    else: raise ValueError('未知的多图统计操作。')
+    result = np.empty_like(images[0]); result[:, :, :3] = rgb; result[:, :, 3] = 255
     return result
 
 
