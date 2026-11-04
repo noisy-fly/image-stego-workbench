@@ -4,7 +4,7 @@
 
 ## 启动
 
-Windows 64 位用户可在仓库的 Releases 页面下载安装包 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
+Windows 64 位用户可在 [Releases 下载页面](https://github.com/noisy-fly/image-stego-workbench/releases) 选择预览版，下载附件 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
 
 从源码运行需要 Python 3、PySide6、Pillow 和 NumPy。安装依赖后双击 `启动.bat`，或者在此目录运行 `py -3 app.py`。
 
@@ -52,3 +52,7 @@ LSB 快速检查是有限范围筛查，仅读取像素前缀、从第一位开�
 ## 验证
 
 运行 `py -3 -m unittest discover -s tests -v`。多帧操作曾使用本机 200 张字幕帧验证，输出出现与既有 Fiji 记录一致的文字轮廓；不代表最终 flag 已验证。
+
+## 发布新版本
+
+推送 `v1.2.3` 或 `v1.2.3-rc.1` 形式的标签会触发 Windows 安装包构建；测试、安装和卸载验证通过后自动发布预览版，并附带 SHA-256 校验文件。安装程序显示数字版本号（例如 `1.2.3`），完整标签保留在 Release 页面。发布说明模板为 `.github/RELEASE_NOTES.md`。

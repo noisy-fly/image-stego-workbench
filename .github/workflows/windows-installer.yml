@@ -38,7 +38,10 @@ jobs:
         run: |
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path -LiteralPath $compiler)) { throw '找不到 Inno Setup 编译器' }
-          & $compiler packaging/installer.iss
+          $versionTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v0.1.0' }
+          $version = python release_version.py $versionTag
+          if ($LASTEXITCODE -ne 0) { throw '发行标签格式不正确' }
+          & $compiler "--define=AppVersion=$version" packaging/installer.iss
           if ($LASTEXITCODE -ne 0) { throw '安装包编译失败' }
       - name: 安装与启动验证
         shell: pwsh
@@ -77,5 +80,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME installer-output/StegoWorkbench-Setup.exe installer-output/SHA256.txt --verify-tag --prerelease --title "图片隐写工作台 $env:GITHUB_REF_NAME" --notes "Windows x64 中文安装版。安装和卸载及程序启动自检已在 GitHub Actions 中验证。当前为开发预览版，安装包尚未进行代码签名。"
+          gh release create $env:GITHUB_REF_NAME installer-output/StegoWorkbench-Setup.exe installer-output/SHA256.txt --verify-tag --prerelease --title "图片隐写工作台 $env:GITHUB_REF_NAME" --notes-file .github/RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw '发布安装包失败' }
