@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows:
@@ -70,3 +71,11 @@ jobs:
             installer-output/StegoWorkbench-Setup.exe
             installer-output/SHA256.txt
           if-no-files-found: error
+      - name: 发布安装包
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME installer-output/StegoWorkbench-Setup.exe installer-output/SHA256.txt --verify-tag --prerelease --title "图片隐写工作台 $env:GITHUB_REF_NAME" --notes "Windows x64 中文安装版。安装和卸载及程序启动自检已在 GitHub Actions 中验证。当前为开发预览版，安装包尚未进行代码签名。"
+          if ($LASTEXITCODE -ne 0) { throw '发布安装包失败' }
