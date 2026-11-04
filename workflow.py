@@ -118,7 +118,7 @@ class Workflow(QDialog):
             QMessageBox.information(self, '运行流程', '请只选择一个结果节点。'); return
         try:
             result = self.calculate(self.order[0], set())
-            self.owner.add_card(result, '流程结果')
+            self.owner.add_card(result, '流程结果', generated=True)
             QMessageBox.information(self, '运行完成', '结果已添加到主画布。')
         except Exception as exc:
             QMessageBox.warning(self, '运行失败', str(exc))

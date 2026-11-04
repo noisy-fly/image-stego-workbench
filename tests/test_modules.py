@@ -37,4 +37,11 @@ class ModuleTests(unittest.TestCase):
             with self.subTest(op=op):
                 self.assertEqual(combine_images(self.a, self.b, op).shape, self.a.shape)
 
+    def test_stego_pixel_operations(self):
+        self.assertEqual(process_image(self.a, 'constant_xor', value=255)[0, 0].tolist(), [5, 253, 251, 20])
+        self.assertEqual(process_image(self.a, 'low_bits', bits=2)[0, 0].tolist(), [170, 170, 0, 255])
+        self.assertEqual(process_image(self.a, 'swap_rb')[0, 0].tolist(), [4, 2, 250, 20])
+        self.assertEqual(process_image(self.a, 'rgb_xor')[0, 0].tolist(), [252, 252, 252, 255])
+        self.assertEqual(combine_images(self.a, self.b, 'xnor')[0, 0].tolist(), [15, 254, 254, 255])
+
 if __name__ == '__main__': unittest.main()

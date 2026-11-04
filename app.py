@@ -132,10 +132,10 @@ class Analysis(QDialog):
 
 
 class Card(QGraphicsPixmapItem):
-    def __init__(self, parent, image, title):
+    def __init__(self, parent, image, title, generated=False):
         super().__init__(pixmap(image, 72, 48))
         self.setShapeMode(QGraphicsPixmapItem.ShapeMode.BoundingRectShape)
-        self.owner, self.image, self.title = parent, image, title
+        self.owner, self.image, self.title, self.generated = parent, image, title, generated
         self.links = []
         self.setFlags(self.GraphicsItemFlag.ItemIsMovable | self.GraphicsItemFlag.ItemIsSelectable | self.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
@@ -264,6 +264,12 @@ class Canvas(QGraphicsView):
             self.owner.remember(self.move_before)
         self.move_before = None; self.move_positions = None
 
+    def keyPressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier and event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self.owner.select_direction('input' if event.key() == Qt.Key.Key_Left else 'output')
+            event.accept(); return
+        super().keyPressEvent(event)
+
     def auto_scroll(self):
         if self.drag_position is None: return
         edge = 75
@@ -338,6 +344,8 @@ class Main(QMainWindow):
             button = QPushButton(text); button.setMenu(menu); toolbar.addWidget(button, 1)
         layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
+        self.direction_context = None; self.changing_direction = False
+        self.canvas.scene().selectionChanged.connect(self.selection_changed)
         self.statusBar().showMessage('准备就绪')
         for key, callback in [('Ctrl+A', self.select_all), ('Ctrl+C', self.copy_selection), ('Ctrl+V', self.paste_selection),
                               ('Ctrl+Z', self.undo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+Y', self.redo), ('Delete', self.delete_selection),
@@ -359,11 +367,15 @@ class Main(QMainWindow):
         add(single, '高斯模糊…', self.ask_blur)
         add(single, '批量提取通道…', self.ask_channel)
         add(single, '查看某个位平面…', self.ask_plane)
+        add(single, '最低若干位增强显示…', self.ask_low_bits)
+        add(single, 'RGB 像素异或固定数值…', self.ask_constant_xor)
+        add(single, 'RGB 三通道相互异或', lambda: self.apply_single('rgb_xor', 'RGB通道异或'))
+        add(single, '交换红蓝通道', lambda: self.apply_single('swap_rb', '交换红蓝'))
         return single
 
     def combine_menu(self):
         combine = QMenu('双图组合（选中 + 节点）', self); add = self.add_menu_action
-        for label, key in [('按位异或 XOR', 'xor'), ('按位与 AND', 'and'), ('按位或 OR', 'or'),
+        for label, key in [('按位异或 XOR', 'xor'), ('异或后反相 XNOR', 'xnor'), ('按位与 AND', 'and'), ('按位或 OR', 'or'),
                            ('绝对差值', 'difference'), ('相加（溢出回绕）', 'add'),
                            ('相减（前图减后图，溢出回绕）', 'subtract'), ('两图平均', 'mean')]:
             add(combine, label, lambda checked=False, k=key, name=label: self.apply_combine(k, name))
@@ -413,6 +425,14 @@ class Main(QMainWindow):
         bit, ok = QInputDialog.getInt(self, '位平面', '选择位（0 是最低位）：', 0, 0, 7)
         if ok: self.apply_single('plane', f'{name}通道第{bit}位', component=labels.index(name), bit=bit)
 
+    def ask_low_bits(self):
+        bits, ok = QInputDialog.getInt(self, '最低位增强显示', '提取 RGB 各通道最低几位并拉伸到 0–255：', 2, 1, 8)
+        if ok: self.apply_single('low_bits', f'最低{bits}位增强', bits=bits)
+
+    def ask_constant_xor(self):
+        value, ok = QInputDialog.getInt(self, '像素异或固定数值', 'RGB 各通道与该数值逐位异或（十进制）：', 1, 0, 255)
+        if ok: self.apply_single('constant_xor', f'异或{value}', value=value)
+
     def apply_single(self, operation, label, **options):
         cards = self.selected_cards()
         if not cards:
@@ -421,7 +441,7 @@ class Main(QMainWindow):
         except Exception as exc: QMessageBox.warning(self, '处理失败', str(exc)); return
         before = self.snapshot(); self.canvas.scene().clearSelection()
         for card, result in zip(cards, results):
-            op = self.create_operation([card]); out = self.add_card(result, label + ' 结果')
+            op = self.create_operation([card]); out = self.add_card(result, label + ' 结果', generated=True)
             op.output = out; out.links.append(op); op.update_paths(); out.setSelected(True)
         self.remember(before); self.statusBar().showMessage(f'{label}：已处理 {len(results)} 张图片')
 
@@ -432,12 +452,12 @@ class Main(QMainWindow):
         try: result = aggregate_images([c.image for c in cards], operation)
         except Exception as exc: QMessageBox.warning(self, '处理失败', str(exc)); return
         before = self.snapshot(); self.canvas.scene().clearSelection()
-        result_card = self.add_card(result, label + ' 结果'); result_card.setSelected(True)
+        result_card = self.add_card(result, label + ' 结果', generated=True); result_card.setSelected(True)
         self.remember(before); self.statusBar().showMessage(f'{label}：已统计 {len(cards)} 张图片')
 
     def snapshot(self):
         indices = {card: i for i, card in enumerate(self.cards)}
-        cards = [(c.image, c.title, c.pos().x(), c.pos().y(), c.isSelected()) for c in self.cards]
+        cards = [(c.image, c.title, c.pos().x(), c.pos().y(), c.isSelected(), c.generated) for c in self.cards]
         operations = [([indices[c] for c in op.sources], indices[op.output] if op.output is not None else None, op.isSelected()) for op in self.operations]
         return cards, operations, self.canvas.sceneRect()
 
@@ -450,8 +470,8 @@ class Main(QMainWindow):
         for card in self.cards: card.timer.stop()
         self.canvas.scene().clear(); self.cards = []; self.operations = []
         self.canvas.setSceneRect(rect)
-        for image, title, x, y, selected in cards:
-            card = Card(self, image, title); self.canvas.scene().addItem(card); self.cards.append(card)
+        for image, title, x, y, selected, generated in cards:
+            card = Card(self, image, title, generated); self.canvas.scene().addItem(card); self.cards.append(card)
             card.setPos(x, y); card.setSelected(selected)
         for sources, output, selected in operations:
             op = self.create_operation([self.cards[i] for i in sources]); op.setSelected(selected)
@@ -469,7 +489,7 @@ class Main(QMainWindow):
     def copy_selection(self):
         cards = self.selected_cards()
         if not cards: self.statusBar().showMessage('请先选择图片'); return
-        self.clipboard_cards = [(c.image, c.title, c.pos().x(), c.pos().y()) for c in cards]
+        self.clipboard_cards = [(c.image, c.title, c.generated) for c in cards]
         self.clipboard_token = uuid.uuid4().hex
         mime = QMimeData(); mime.setData('application/x-stego-workbench', self.clipboard_token.encode())
         if len(cards) == 1: mime.setImageData(pixmap(cards[0].image).toImage())
@@ -485,12 +505,12 @@ class Main(QMainWindow):
         elif mime.hasImage():
             image = QApplication.clipboard().image().convertToFormat(QImage.Format.Format_RGBA8888)
             data = np.frombuffer(image.bits(), dtype=np.uint8).reshape(image.height(), image.bytesPerLine())[:, :image.width()*4].reshape(image.height(), image.width(), 4).copy()
-            copies = [(data, '剪贴板图片', 0, 0)]
+            copies = [(data, '剪贴板图片', False)]
         else:
             self.statusBar().showMessage('剪贴板中没有可粘贴的图片'); return
         before = self.snapshot(); self.canvas.scene().clearSelection()
-        for image, title, x, y in copies:
-            card = self.add_card(image, title + ' 副本'); card.setSelected(True)
+        for image, title, generated in copies:
+            card = self.add_card(image, title + ' 副本', generated=generated); card.setSelected(True)
         self.remember(before); self.statusBar().showMessage(f'已粘贴 {len(copies)} 张图片')
 
     def delete_selection(self):
@@ -509,6 +529,31 @@ class Main(QMainWindow):
 
     def select_all(self):
         for item in self.cards + self.operations: item.setSelected(True)
+        self.canvas.setFocus()
+
+    def selection_changed(self):
+        if not self.changing_direction: self.direction_context = None
+
+    def select_direction(self, direction):
+        if self.direction_context is None:
+            selected = {c for c in self.cards if c.isSelected()}
+            operations = [op for op in self.operations if op.isSelected()]
+            if not selected and not operations:
+                self.statusBar().showMessage('请先选择图片或处理节点'); return
+            sources = {c for op in operations for c in op.sources}
+            outputs = {op.output for op in operations if op.output is not None}
+            sources.update(c for c in selected if not c.generated)
+            outputs.update(c for c in selected if c.generated)
+            self.direction_context = (sources, outputs)
+        targets = self.direction_context[0 if direction == 'input' else 1]
+        if not targets:
+            self.statusBar().showMessage('当前选中范围没有对应的输入图片' if direction == 'input' else '当前选中范围没有处理结果'); return
+        self.changing_direction = True
+        try:
+            self.canvas.scene().clearSelection()
+            for card in targets: card.setSelected(True)
+        finally: self.changing_direction = False
+        self.statusBar().showMessage(f'已选中 {len(targets)} 张' + ('输入图片' if direction == 'input' else '处理结果'))
 
     def browse(self):
         paths, _ = QFileDialog.getOpenFileNames(self, '导入图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.gif *.tif *.tiff *.webp);;所有文件 (*)')
@@ -528,8 +573,8 @@ class Main(QMainWindow):
         if len(self.cards) != old_count: self.remember(before)
         self.statusBar().showMessage(f'画布中有 {len(self.cards)} 张图片')
 
-    def add_card(self, image, title):
-        card = Card(self, image, title); self.canvas.scene().addItem(card)
+    def add_card(self, image, title, generated=False):
+        card = Card(self, image, title, generated); self.canvas.scene().addItem(card)
         i = 0
         occupied = [c.sceneBoundingRect().adjusted(-10, -10, 10, 28) for c in self.cards]
         occupied += [op.sceneBoundingRect().adjusted(-10, -10, 10, 10) for op in self.operations]
@@ -599,7 +644,7 @@ class Main(QMainWindow):
         for op in operations:
             a, b = (c.image for c in op.sources)
             result = combine_images(a, b, operation)
-            out = self.add_card(result, label + ' 结果'); out.setPos(op.pos() + QPointF(100, 0))
+            out = self.add_card(result, label + ' 结果', generated=True); out.setPos(op.pos() + QPointF(100, 0))
             op.output = out; out.links.append(op); op.update_paths()
         self.remember(before)
         self.statusBar().showMessage(f'已完成 {len(operations)} 个{label}')
@@ -625,7 +670,7 @@ class Main(QMainWindow):
                 result = pair_xor_average(frames, dialog.threshold.value())
                 results.append(np.array(Image.fromarray(result).convert('RGBA')))
             before = self.snapshot()
-            for i, result in enumerate(results): self.add_card(result, f'第{i+1}组 XOR 平均')
+            for i, result in enumerate(results): self.add_card(result, f'第{i+1}组 XOR 平均', generated=True)
             self.remember(before)
             self.statusBar().showMessage(f'已完成 {len(results)} 组、{sum(map(len, dialog.groups))} 对图片')
         except Exception as e: QMessageBox.warning(self, '处理失败', str(e))
@@ -644,7 +689,7 @@ class Main(QMainWindow):
         if a.shape != b.shape:
             QMessageBox.warning(self, '尺寸不一致', '两张图片必须具有相同尺寸。'); return
         result = np.bitwise_xor(a, b); result[:, :, 3] = 255
-        self.add_card(result, '两图 XOR')
+        self.add_card(result, '两图 XOR', generated=True)
 
 
 def main():

@@ -47,6 +47,20 @@ def as_rgba(gray):
 
 def process_image(image, operation, **options):
     if operation == 'invert': return invert(image)
+    if operation == 'constant_xor':
+        value = options['value']
+        if not 0 <= value <= 255: raise ValueError('异或值必须在 0 到 255 之间。')
+        result = image.copy(); result[:, :, :3] ^= np.uint8(value); return result
+    if operation == 'low_bits':
+        bits = options['bits']
+        if not 1 <= bits <= 8: raise ValueError('位数必须在 1 到 8 之间。')
+        mask = (1 << bits) - 1
+        result = np.empty_like(image); result[:, :, :3] = ((image[:, :, :3] & mask).astype(np.uint16) * 255 // mask).astype(np.uint8)
+        result[:, :, 3] = 255; return result
+    if operation == 'swap_rb':
+        result = image.copy(); result[:, :, :3] = image[:, :, [2, 1, 0]]; return result
+    if operation == 'rgb_xor':
+        return as_rgba(image[:, :, 0] ^ image[:, :, 1] ^ image[:, :, 2])
     if operation == 'channel': return as_rgba(channel(image, options['component']))
     if operation == 'plane': return as_rgba(bit_plane(image, options['component'], options['bit']))
     if operation == 'gray': return as_rgba(np.asarray(Image.fromarray(image).convert('L')))
@@ -71,6 +85,7 @@ def combine_images(first, second, operation):
     if first.shape != second.shape: raise ValueError('图片尺寸必须一致。')
     a, b = first[:, :, :3], second[:, :, :3]
     if operation == 'xor': rgb = np.bitwise_xor(a, b)
+    elif operation == 'xnor': rgb = np.bitwise_not(np.bitwise_xor(a, b))
     elif operation == 'and': rgb = np.bitwise_and(a, b)
     elif operation == 'or': rgb = np.bitwise_or(a, b)
     elif operation == 'add': rgb = (a.astype(np.uint16) + b.astype(np.uint16)).astype(np.uint8)

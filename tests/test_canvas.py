@@ -205,5 +205,34 @@ class CanvasTests(unittest.TestCase):
         self.assertEqual(len(w.selected_cards()), 2)
         self.assertEqual(a.image[0, 0].tolist(), [1, 2, 3, 255]); w.close()
 
+    def test_arrow_selection_filters_pairs_and_toggles(self):
+        w = Main(); w.show(); w.activateWindow(); w.canvas.setFocus(); self.app.processEvents()
+        a = w.add_card(np.full((2, 2, 4), 2, dtype=np.uint8), 'a')
+        b = w.add_card(np.full((2, 2, 4), 3, dtype=np.uint8), 'b')
+        op = w.create_operation([a, b]); op.setSelected(True); w.apply_xor()
+        w.select_all(); QTest.keyClick(w.canvas, Qt.Key.Key_Right)
+        self.assertEqual(w.selected_cards(), [op.output])
+        QTest.keyClick(w.canvas, Qt.Key.Key_Left)
+        self.assertEqual(set(w.selected_cards()), {a, b})
+        w.close()
+
+    def test_arrow_includes_standalone_result_and_restores_role(self):
+        w = Main(); a = w.add_card(np.full((2,2,4), 3, dtype=np.uint8), 'a')
+        b = w.add_card(np.full((2,2,4), 4, dtype=np.uint8), 'b')
+        a.setSelected(True); b.setSelected(True); w.apply_aggregate('mean', '平均')
+        w.undo(); w.redo(); w.select_all(); w.select_direction('output')
+        self.assertEqual([c.title for c in w.selected_cards()], ['平均 结果'])
+        w.close()
+
+    def test_arrow_selection_respects_selected_nodes(self):
+        w = Main(); cards = [w.add_card(np.full((2,2,4), v, dtype=np.uint8), str(v)) for v in range(4)]
+        first = w.create_operation(cards[:2]); second = w.create_operation(cards[2:])
+        first.setSelected(True); w.apply_xor(); first.setSelected(False)
+        second.setSelected(True); w.apply_xor(); second.setSelected(False)
+        first.setSelected(True); w.select_direction('output')
+        self.assertEqual(w.selected_cards(), [first.output])
+        w.select_direction('input'); self.assertEqual(set(w.selected_cards()), set(cards[:2]))
+        w.close()
+
 
 if __name__ == '__main__': unittest.main()
