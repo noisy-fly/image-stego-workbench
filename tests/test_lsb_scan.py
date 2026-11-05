@@ -31,7 +31,7 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(any(r['channels'] == (0,) and r['bit'] == 0 and not r['column'] and not r['little'] and r['kind'] == '花括号格式文本' and r['offset'] == 0 for r in results))
 
     def test_common_named_braces_and_offset(self):
-        for payload in (b'ctfshow{hello_123}', b'picoCTF{abc-123}', b'my_team9{hello}'):
+        for payload in (b'ctfshow{hello_123}', b'picoCTF{abc-123}', b'my_team9{hello}', b'f1a9{hello_123}'):
             image = embed(b'!'+payload, (30, 30), [0, 1, 2])
             hit = next(r for r in scan_lsb(image) if r['kind'] == '花括号格式文本' and r['channels'] == (0,1,2) and not r['column'] and not r['little'])
             self.assertEqual(hit['offset'], 1)
