@@ -6,6 +6,8 @@
 
 Windows 64 位用户可在 [Releases 下载页面](https://github.com/noisy-fly/image-stego-workbench/releases/latest) 下载附件 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
 
+程序启动后会在后台检查本项目的 GitHub 最新正式版。发现新版本时可选择立即更新、忽略此版本或以后再说；忽略后同一版本不再自动提醒，新的版本仍会提醒。“设置 → 检测更新”可随时手动检查，包括已忽略的版本。更新时会验证 Release 提供的安装包 SHA-256，成功后关闭程序并打开安装向导；尚未保存的画布内容会丢失。
+
 从源码运行需要 Python 3、PySide6、Pillow、NumPy 和 PyAV（媒体解码）。安装依赖后双击 `启动.bat`，或者在此目录运行 `py -3 app.py`。
 
 ```powershell

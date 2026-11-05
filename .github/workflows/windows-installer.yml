@@ -34,16 +34,21 @@ jobs:
       - name: 打包 Windows 程序
         shell: pwsh
         run: |
+          $versionTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v' + (python -c "from app_version import APP_VERSION; print(APP_VERSION)") }
+          python release_version.py $versionTag
+          if ($LASTEXITCODE -ne 0) { throw '发行标签格式不正确' }
+          $appVersion = $versionTag.Substring(1)
+          "APP_VERSION = '$appVersion'" | Set-Content -Encoding utf8 build_version.py
           $avLibs = python -c "import av,pathlib; print(pathlib.Path(av.__file__).parent.parent / 'av.libs')"
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $avLibs)) { throw '找不到 PyAV 媒体解码库' }
-          python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas --hidden-import extract_dialog --collect-all av --add-binary "$avLibs\*.dll;av.libs" app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas --hidden-import extract_dialog --hidden-import build_version --collect-all av --add-binary "$avLibs\*.dll;av.libs" app.py
           if ($LASTEXITCODE -ne 0) { throw '程序打包失败' }
       - name: 编译中文安装向导
         shell: pwsh
         run: |
           $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path -LiteralPath $compiler)) { throw '找不到 Inno Setup 编译器' }
-          $versionTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v0.1.0' }
+          $versionTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'v' + (python -c "from app_version import APP_VERSION; print(APP_VERSION)") }
           $version = python release_version.py $versionTag
           if ($LASTEXITCODE -ne 0) { throw '发行标签格式不正确' }
           & $compiler "/DAppVersion=$version" packaging/installer.iss
@@ -60,6 +65,7 @@ jobs:
           if ($setup.ExitCode -ne 0) { throw "安装失败，退出码 $($setup.ExitCode)" }
           $executable = Join-Path $installDir 'StegoWorkbench.exe'
           if (-not (Test-Path -LiteralPath $executable)) { throw '安装后找不到程序' }
+          $env:STEGO_EXPECT_VERSION = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.Substring(1) } else { python -c "from app_version import APP_VERSION; print(APP_VERSION)" }
           $process = Start-Process -FilePath $executable -ArgumentList '--smoke-test' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "程序自检失败，退出码 $($process.ExitCode)" }
           $uninstaller = Join-Path $installDir 'unins000.exe'

@@ -1,10 +1,12 @@
 import sys
 import re
 import uuid
+import os
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from app_version import APP_VERSION
 from PySide6.QtCore import Qt, QTimer, QPointF, QEvent, QMimeData, QRectF
 from PySide6.QtGui import QImage, QPixmap, QPainterPath, QPen, QColor, QAction, QMouseEvent
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -374,10 +376,12 @@ class Main(QMainWindow):
         for text, func in [('导入图片', self.browse), ('单图分析', self.open_analysis), ('创建配对 +', self.create_pairs)]:
             button = QPushButton(text); button.clicked.connect(func); toolbar.addWidget(button, 1)
         for text, menu in [('单图处理', self.single_menu()), ('双图组合', self.combine_menu()),
-                           ('多图统计', self.statistics_menu()), ('更多工具', self.more_menu())]:
+                           ('多图统计', self.statistics_menu()), ('更多工具', self.more_menu()), ('设置', self.settings_menu())]:
             button = QPushButton(text); button.setMenu(menu); toolbar.addWidget(button, 1)
         layout.addLayout(toolbar)
         self.canvas = Canvas(self); layout.addWidget(self.canvas)
+        from update_ui import UpdateController
+        self.updater = UpdateController(self)
         self.direction_context = None; self.changing_direction = False
         self.canvas.scene().selectionChanged.connect(self.selection_changed)
         self.statusBar().showMessage('准备就绪')
@@ -427,6 +431,13 @@ class Main(QMainWindow):
         self.add_menu_action(menu, '从文件提取并分组图片…', self.open_extract_dialog)
         self.add_menu_action(menu, '图形工作流', self.workflow)
         self.add_menu_action(menu, '从文件批量配对并平均…', self.average)
+        return menu
+
+    def settings_menu(self):
+        menu = QMenu('设置', self)
+        version = menu.addAction(f'当前版本：{APP_VERSION}'); version.setEnabled(False)
+        menu.addSeparator()
+        self.add_menu_action(menu, '检测更新', lambda: self.updater.check(manual=True))
         return menu
 
     def open_extract_dialog(self):
@@ -740,6 +751,9 @@ def main():
         from extract_sources import inspect_source, extract_groups
         import av
         import tempfile
+        from app_version import APP_VERSION
+        expected_version = os.environ.get('STEGO_EXPECT_VERSION')
+        if expected_version and APP_VERSION != expected_version: raise ValueError('安装版版本号不匹配。')
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)
@@ -758,7 +772,7 @@ def main():
                 assert extracted.convert('RGB').getpixel((0, 0)) == (123, 123, 123)
         if sys.stdout is not None: print('SMOKE_OK', flush=True)
         return
-    window = Main(); window.show(); sys.exit(app.exec())
+    window = Main(); window.show(); QTimer.singleShot(1200, lambda: window.updater.check(manual=False)); sys.exit(app.exec())
 
 
 if __name__ == '__main__': main()
