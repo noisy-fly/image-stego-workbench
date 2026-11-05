@@ -53,7 +53,9 @@ class Analysis(QDialog):
         search_button.clicked.connect(self.basic_search)
         top = QHBoxLayout(); top.addWidget(search_button)
         hex_button = QPushButton('十六进制编辑'); hex_button.setObjectName('hexEditorButton')
-        hex_button.clicked.connect(self.edit_hex); top.addWidget(hex_button); layout.addLayout(top)
+        hex_button.clicked.connect(self.edit_hex); top.addWidget(hex_button)
+        jsteg_button = QPushButton('JSteg 提取'); jsteg_button.setObjectName('jstegButton')
+        jsteg_button.clicked.connect(self.extract_jsteg); top.addWidget(jsteg_button); layout.addLayout(top)
         self.name = QLabel('原图')
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -103,6 +105,10 @@ class Analysis(QDialog):
     def basic_search(self):
         from basic_search_dialog import BasicSearchDialog
         BasicSearchDialog(self, self.source_ref).exec()
+
+    def extract_jsteg(self):
+        from jsteg_dialog import JstegDialog
+        JstegDialog(self, self.source_ref).exec()
 
     def edit_hex(self):
         from hex_editor import HexEditorDialog
@@ -828,6 +834,10 @@ def main():
         if expected_version and APP_VERSION != expected_version: raise ValueError('安装版版本号不匹配。')
         bpg_sample = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'vendor' / 'bpg' / 'sample.bpg'
         assert tuple(load_image(bpg_sample)[0, 0]) == (255, 0, 0, 128)
+        from jsteg_extract import reveal_jsteg
+        from file_inspection import source_reference
+        jsteg_sample = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'vendor' / 'jsteg' / 'sample.jpg'
+        assert reveal_jsteg(source_reference(jsteg_sample)) == b'demo{sample}\x00\xffbinary'
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)
