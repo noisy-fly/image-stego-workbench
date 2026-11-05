@@ -146,8 +146,11 @@ def scan_lsb(image, max_pixels=65536):
                 for little in (False, True):
                     data = np.packbits(values[:len(values)//8*8], bitorder='little' if little else 'big').tobytes()
                     hits = [(kind, data.find(signature)) for kind, signature in signatures]
-                    match = re.search(rb'(?i)(?:flag|ctf)\{[\x20-\x7d]{1,200}\}', data)
-                    if match: hits.insert(0, ('flag 样式文本', match.start()))
+                    pattern = rb'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]{0,31}\{[\x20-\x7a\x7c\x7e]{1,200}\}'
+                    matches = re.finditer(pattern, data)
+                    for index, match in enumerate(matches):
+                        if index >= 16: break
+                        hits.insert(index, ('花括号格式文本', match.start()))
                     for kind, offset in hits:
                         if offset >= 0:
                             results.append({'channels': channels, 'bit': bit, 'column': column, 'little': little,

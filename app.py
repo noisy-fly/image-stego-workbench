@@ -101,7 +101,7 @@ class Analysis(QDialog):
         dialog = QDialog(self); dialog.setWindowTitle('LSB 快速检查'); dialog.resize(820, 600)
         box = QVBoxLayout(dialog)
         box.addWidget(QLabel('检查前 65,536 个像素；按行 / 按列、RGBA 常见组合、最低两位及两种字节位序。'))
-        box.addWidget(QLabel('只识别少量常见文件头和 flag{…} / ctf{…} 样式文本；候选可能误报，未发现不代表没有隐写。'))
+        box.addWidget(QLabel('识别少量常见文件头和名称{内容}格式文本；候选可能误报，未发现不代表没有隐写。'))
         status = QLabel('正在检查…'); box.addWidget(status)
         results_list = QListWidget(); box.addWidget(results_list)
         preview = QTextEdit(); preview.setReadOnly(True); preview.setMaximumHeight(145); box.addWidget(preview)

@@ -18,19 +18,19 @@ class UpdateUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             settings_file = str(Path(temp) / 'settings.ini')
             settings = QSettings(settings_file, QSettings.Format.IniFormat)
-            window = Main(); controller = UpdateController(window, settings); info = {'tag': 'v0.7.0'}
+            window = Main(); controller = UpdateController(window, settings); info = {'tag': 'v0.8.0'}
             def ignore():
                 box = window.findChild(QMessageBox)
                 next(b for b in box.buttons() if b.text() == '忽略此版本').click()
             QTimer.singleShot(10, ignore); controller.offer(info)
             saved = QSettings(settings_file, QSettings.Format.IniFormat)
-            self.assertEqual(saved.value('ignored_release'), 'v0.7.0')
+            self.assertEqual(saved.value('ignored_release'), 'v0.8.0')
             with patch.object(controller, 'offer') as offer:
                 controller.manual_pending = False; controller.checked(info, '')
                 offer.assert_not_called()
                 controller.manual_pending = True; controller.checked(info, '')
                 offer.assert_called_once_with(info)
-                offer.reset_mock(); controller.manual_pending = False; controller.checked({'tag':'v0.8.0'}, '')
+                offer.reset_mock(); controller.manual_pending = False; controller.checked({'tag':'v0.9.0'}, '')
                 offer.assert_called_once()
             window.close()
 

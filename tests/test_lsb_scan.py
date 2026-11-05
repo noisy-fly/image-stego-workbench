@@ -28,7 +28,20 @@ class ScanTests(unittest.TestCase):
     def test_detects_flag_and_parameters(self):
         image = embed(b'flag{hello_123}', (30, 30), [0])
         results = scan_lsb(image)
-        self.assertTrue(any(r['channels'] == (0,) and r['bit'] == 0 and not r['column'] and not r['little'] and r['kind'] == 'flag 样式文本' and r['offset'] == 0 for r in results))
+        self.assertTrue(any(r['channels'] == (0,) and r['bit'] == 0 and not r['column'] and not r['little'] and r['kind'] == '花括号格式文本' and r['offset'] == 0 for r in results))
+
+    def test_common_named_braces_and_offset(self):
+        for payload in (b'ctfshow{hello_123}', b'picoCTF{abc-123}', b'my_team9{hello}'):
+            image = embed(b'!'+payload, (30, 30), [0, 1, 2])
+            hit = next(r for r in scan_lsb(image) if r['kind'] == '花括号格式文本' and r['channels'] == (0,1,2) and not r['column'] and not r['little'])
+            self.assertEqual(hit['offset'], 1)
+            data = extract_bits(image, hit['channels'], [hit['bit']], hit['column'], hit['little'], bit_offset=hit['offset']*8)
+            self.assertTrue(data.startswith(payload))
+
+    def test_invalid_brace_patterns_are_not_detected(self):
+        for payload in (b'{missing_name}', b'name{}', b'name{unterminated', b'name{bad\x00data}'):
+            image = embed(payload, (30, 30), [0])
+            self.assertFalse(any(r['kind'] == '花括号格式文本' and r['channels'] == (0,) and not r['column'] and not r['little'] for r in scan_lsb(image)))
 
     def test_detects_header_in_column_rgb_little_order(self):
         image = embed(b'\x89PNG\r\n\x1a\nhello', (30, 30), [0, 1, 2], column=True, little=True)
@@ -38,9 +51,9 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
 
     def test_nonzero_offset_transfers_to_manual_extraction(self):
-        image = embed(b'junkflag{valid}', (30, 30), [0])
-        hit = next(r for r in scan_lsb(image) if r['kind'] == 'flag 样式文本' and r['channels'] == (0,) and not r['column'] and not r['little'])
-        self.assertEqual(hit['offset'], 4)
+        image = embed(b'junk:flag{valid}', (30, 30), [0])
+        hit = next(r for r in scan_lsb(image) if r['kind'] == '花括号格式文本' and r['channels'] == (0,) and not r['column'] and not r['little'])
+        self.assertEqual(hit['offset'], 5)
         data = extract_bits(image, hit['channels'], [hit['bit']], hit['column'], hit['little'], bit_offset=hit['offset']*8)
         self.assertTrue(data.startswith(b'flag{valid}'))
 
@@ -49,7 +62,7 @@ class ScanTests(unittest.TestCase):
 
     def test_scan_budget_is_enforced(self):
         image = embed(b'01234567flag{later}', (30, 30), [0])
-        self.assertFalse(any(r['kind'] == 'flag 样式文本' for r in scan_lsb(image, max_pixels=64)))
+        self.assertFalse(any(r['kind'] == '花括号格式文本' for r in scan_lsb(image, max_pixels=64)))
 
     def test_quick_scan_window_passes_preset(self):
         app = self.app
@@ -67,14 +80,14 @@ class ScanTests(unittest.TestCase):
         QTimer.singleShot(25, interact)
         analysis.quick_scan()
         self.assertTrue(captured)
-        self.assertEqual(captured[0]['kind'], 'flag 样式文本')
+        self.assertEqual(captured[0]['kind'], '花括号格式文本')
         analysis.close(); analysis.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_manual_dialog_uses_scan_parameters(self):
         app = self.app
-        image = embed(b'junkflag{valid}', (30,30), [0])
-        hit = next(r for r in scan_lsb(image) if r['kind'] == 'flag 样式文本' and r['channels'] == (0,) and not r['column'] and not r['little'])
+        image = embed(b'junk:flag{valid}', (30,30), [0])
+        hit = next(r for r in scan_lsb(image) if r['kind'] == '花括号格式文本' and r['channels'] == (0,) and not r['column'] and not r['little'])
         analysis = Analysis(None, image, '样例'); captured = []
         def interact():
             dialog = next(w for w in app.topLevelWidgets() if isinstance(w, QDialog) and w.windowTitle() == '提取像素位数据')
@@ -84,7 +97,7 @@ class ScanTests(unittest.TestCase):
             dialog.accept()
         QTimer.singleShot(25, interact); analysis.extract(hit)
         self.assertTrue(captured[0][0]['R']); self.assertFalse(captured[0][0]['G'])
-        self.assertTrue(captured[0][0]['第0位']); self.assertEqual(captured[0][1], 32)
+        self.assertTrue(captured[0][0]['第0位']); self.assertEqual(captured[0][1], 40)
         analysis.close(); analysis.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
