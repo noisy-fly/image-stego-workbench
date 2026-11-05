@@ -424,9 +424,14 @@ class Main(QMainWindow):
 
     def more_menu(self):
         menu = QMenu('更多工具', self)
+        self.add_menu_action(menu, '从文件提取并分组图片…', self.open_extract_dialog)
         self.add_menu_action(menu, '图形工作流', self.workflow)
         self.add_menu_action(menu, '从文件批量配对并平均…', self.average)
         return menu
+
+    def open_extract_dialog(self):
+        from extract_dialog import ExtractDialog
+        ExtractDialog(self).exec()
 
     def module_menu(self):
         menu = QMenu(self)
@@ -731,10 +736,12 @@ def main():
     app.setStyleSheet('QWidget {font-family: "Microsoft YaHei UI"; font-size: 10pt;} QPushButton {padding: 8px 14px;}')
     if '--smoke-test' in sys.argv:
         from workflow_canvas import Workflow
+        from extract_dialog import ExtractDialog
+        import av
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
-        analysis = Analysis(window, image, '测试.png'); flow = Workflow(window)
-        assert len(analysis.variants) == 38 and flow.scene is not None
+        analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)
+        assert len(analysis.variants) == 38 and flow.scene is not None and extractor is not None and av.time_base > 0
         if sys.stdout is not None: print('SMOKE_OK', flush=True)
         return
     window = Main(); window.show(); sys.exit(app.exec())

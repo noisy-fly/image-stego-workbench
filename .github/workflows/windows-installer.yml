@@ -32,7 +32,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "测试失败: $($_.Name)" }
           }
       - name: 打包 Windows 程序
-        run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas app.py
+        shell: pwsh
+        run: |
+          $avLibs = python -c "import av,pathlib; print(pathlib.Path(av.__file__).parent.parent / 'av.libs')"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $avLibs)) { throw '找不到 PyAV 媒体解码库' }
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas --hidden-import extract_dialog --collect-all av --add-binary "$avLibs\*.dll;av.libs" app.py
+          if ($LASTEXITCODE -ne 0) { throw '程序打包失败' }
       - name: 编译中文安装向导
         shell: pwsh
         run: |
