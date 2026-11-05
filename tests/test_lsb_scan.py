@@ -3,7 +3,7 @@ import os
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import numpy as np
 from PySide6.QtCore import QTimer, QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QPushButton, QCheckBox, QSpinBox
+from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QPushButton, QCheckBox, QSpinBox, QComboBox, QTextEdit
 from core import scan_lsb, extract_bits
 from app import Analysis
 
@@ -16,7 +16,7 @@ def embed(payload, shape, channels, column=False, little=False):
     for i, bit in enumerate(bits):
         pixel, component = divmod(i, len(channels))
         y, x = (pixel % h, pixel // h) if column else (pixel // w, pixel % w)
-        image[y, x, channels[component]] |= bit
+        image[y, x, channels[component]] = (image[y, x, channels[component]] & 254) | bit
     return image
 
 
@@ -37,6 +37,48 @@ class ScanTests(unittest.TestCase):
             self.assertEqual(hit['offset'], 1)
             data = extract_bits(image, hit['channels'], [hit['bit']], hit['column'], hit['little'], bit_offset=hit['offset']*8)
             self.assertTrue(data.startswith(payload))
+
+    def test_alpha_reverse_order_detection_and_extraction(self):
+        payload = b'ctfshow{alpha_order}'
+        image = embed(payload, (30, 30), [3, 2, 1], column=True)
+        hit = next(r for r in scan_lsb(image) if r['channels'] == (3, 2, 1) and r['column'] and not r['little'] and r['bit'] == 0 and r['kind'] == '花括号格式文本')
+        data = extract_bits(image, hit['channels'], [hit['bit']], hit['column'], hit['little'], bit_offset=hit['offset']*8)
+        self.assertTrue(data.startswith(payload))
+
+    def test_quick_scan_passes_alpha_order_preset(self):
+        image = embed(b'ctfshow{alpha_order}', (30, 30), [3, 2, 1], column=True)
+        analysis = Analysis(None, image, '样例'); captured = []
+        analysis.extract = lambda preset: captured.append(preset)
+        def interact():
+            dialog = next(w for w in self.app.topLevelWidgets() if isinstance(w, QDialog) and w.windowTitle() == 'LSB 快速检查')
+            listing = dialog.findChild(QListWidget)
+            for i in range(listing.count()):
+                if 'ABG 第 0 位 · 按列 · 高位先装入' in listing.item(i).text():
+                    listing.setCurrentRow(i)
+                    next(b for b in dialog.findChildren(QPushButton) if b.text().startswith('使用选中')).click()
+                    break
+            dialog.accept()
+        QTimer.singleShot(30, interact); analysis.quick_scan()
+        self.assertTrue(captured); self.assertEqual(captured[0]['channels'], (3, 2, 1))
+        analysis.close(); analysis.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_manual_preset_retains_order_and_extracts(self):
+        payload = b'ctfshow{order_test}'
+        image = embed(payload, (30, 30), [3, 2, 1], column=True)
+        analysis = Analysis(None, image, '样例'); result = []
+        def interact():
+            dialog = next(w for w in self.app.topLevelWidgets() if isinstance(w, QDialog) and w.windowTitle() == '提取像素位数据')
+            combo = dialog.findChild(QComboBox, 'channelOrder')
+            self.assertTrue(combo.currentText().startswith('ABG'))
+            next(b for b in dialog.findChildren(QPushButton) if b.text() == '提取并预览').click()
+            result.append(dialog.findChild(QTextEdit).toPlainText())
+            dialog.accept()
+        QTimer.singleShot(30, interact)
+        analysis.extract({'channels': (3, 2, 1), 'bit': 0, 'column': True, 'little': False, 'offset': 0})
+        self.assertIn(payload.decode(), result[0])
+        analysis.close(); analysis.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_invalid_brace_patterns_are_not_detected(self):
         for payload in (b'{missing_name}', b'name{}', b'name{unterminated', b'name{bad\x00data}'):

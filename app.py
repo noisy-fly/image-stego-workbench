@@ -1,5 +1,6 @@
 import sys
 import io
+import itertools
 import re
 import uuid
 import os
@@ -100,7 +101,7 @@ class Analysis(QDialog):
     def quick_scan(self):
         dialog = QDialog(self); dialog.setWindowTitle('LSB 快速检查'); dialog.resize(820, 600)
         box = QVBoxLayout(dialog)
-        box.addWidget(QLabel('检查前 65,536 个像素；按行 / 按列、RGBA 常见组合、最低两位及两种字节位序。'))
+        box.addWidget(QLabel('检查前 65,536 个像素；按行 / 按列、RGBA 通道排列、第 0/1 位及两种字节位序。'))
         box.addWidget(QLabel('识别少量常见文件头和名称{内容}格式文本；候选可能误报，未发现不代表没有隐写。'))
         status = QLabel('正在检查…'); box.addWidget(status)
         results_list = QListWidget(); box.addWidget(results_list)
@@ -135,7 +136,7 @@ class Analysis(QDialog):
         dialog.setWindowTitle('提取像素位数据')
         dialog.resize(700, 500)
         box = QVBoxLayout(dialog)
-        box.addWidget(QLabel('选择通道和位：每个像素按 R→G→B→A、低位→高位的顺序读取。'))
+        box.addWidget(QLabel('选择通道和位；通道按下方顺序读取，所选位按低位到高位读取。'))
         row = QHBoxLayout()
         checks = []
         for name in 'RGBA':
@@ -144,6 +145,13 @@ class Analysis(QDialog):
             row.addWidget(c)
             checks.append(c)
         box.addLayout(row)
+        order_row = QHBoxLayout(); order_row.addWidget(QLabel('通道顺序：'))
+        channel_order = QComboBox(); channel_order.setObjectName('channelOrder')
+        channel_order.addItems([''.join(order) for order in itertools.permutations('RGBA')])
+        selected = preset.get('channels', (0, 1, 2))
+        preferred = ''.join('RGBA'[i] for i in selected) + ''.join('RGBA'[i] for i in range(4) if i not in selected)
+        channel_order.setCurrentText(preferred); order_row.addWidget(channel_order)
+        order_row.addWidget(QLabel('仅使用勾选的通道')); box.addLayout(order_row)
         bit_row = QHBoxLayout(); bit_checks = []
         for i in range(8):
             check = QCheckBox(f'第{i}位'); check.setChecked(i == preset.get('bit', 0)); bit_checks.append(check); bit_row.addWidget(check)
@@ -157,7 +165,7 @@ class Analysis(QDialog):
         output = QTextEdit(); output.setReadOnly(True); box.addWidget(output)
         data = [b'']
         def run():
-            components = [i for i, c in enumerate(checks) if c.isChecked()]
+            components = ['RGBA'.index(name) for name in channel_order.currentText() if checks['RGBA'.index(name)].isChecked()]
             bits = [i for i, c in enumerate(bit_checks) if c.isChecked()]
             if not components or not bits:
                 QMessageBox.warning(dialog, '提示', '请至少选择一个通道和一个位。'); return

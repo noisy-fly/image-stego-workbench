@@ -1,6 +1,7 @@
 """独立实现的像素分析操作；所有输入均为原始 8 位像素。"""
 import numpy as np
 import re
+import itertools
 from PIL import Image, ImageOps, ImageFilter
 
 
@@ -134,7 +135,7 @@ def scan_lsb(image, max_pixels=65536):
                   ('GIF 文件头', b'GIF89a'), ('GIF 文件头', b'GIF87a'),
                   ('PDF 文件头', b'%PDF-'), ('7z 文件头', b'7z\xbc\xaf\x27\x1c'),
                   ('RAR 文件头', b'Rar!\x1a\x07'), ('GZIP 文件头', b'\x1f\x8b\x08')]
-    channel_sets = [(0,), (1,), (2,), (3,), (0,1,2), (0,1,2,3)]
+    channel_sets = [item for size in range(1, 5) for item in itertools.permutations(range(4), size)]
     height, width = image.shape[:2]; count = min(height * width, max_pixels)
     positions = np.arange(count); results = []
     for column in (False, True):
