@@ -2,7 +2,7 @@ import unittest
 import os
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import numpy as np
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QPushButton, QCheckBox, QSpinBox
 from core import scan_lsb, extract_bits
 from app import Analysis
@@ -21,6 +21,10 @@ def embed(payload, shape, channels, column=False, little=False):
 
 
 class ScanTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
     def test_detects_flag_and_parameters(self):
         image = embed(b'flag{hello_123}', (30, 30), [0])
         results = scan_lsb(image)
@@ -48,7 +52,7 @@ class ScanTests(unittest.TestCase):
         self.assertFalse(any(r['kind'] == 'flag 样式文本' for r in scan_lsb(image, max_pixels=64)))
 
     def test_quick_scan_window_passes_preset(self):
-        app = QApplication.instance() or QApplication([])
+        app = self.app
         image = embed(b'flag{ui_test}', (30, 30), [0])
         analysis = Analysis(None, image, '样例')
         captured = []
@@ -64,10 +68,11 @@ class ScanTests(unittest.TestCase):
         analysis.quick_scan()
         self.assertTrue(captured)
         self.assertEqual(captured[0]['kind'], 'flag 样式文本')
-        analysis.close()
+        analysis.close(); analysis.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_manual_dialog_uses_scan_parameters(self):
-        app = QApplication.instance() or QApplication([])
+        app = self.app
         image = embed(b'junkflag{valid}', (30,30), [0])
         hit = next(r for r in scan_lsb(image) if r['kind'] == 'flag 样式文本' and r['channels'] == (0,) and not r['column'] and not r['little'])
         analysis = Analysis(None, image, '样例'); captured = []
@@ -80,7 +85,8 @@ class ScanTests(unittest.TestCase):
         QTimer.singleShot(25, interact); analysis.extract(hit)
         self.assertTrue(captured[0][0]['R']); self.assertFalse(captured[0][0]['G'])
         self.assertTrue(captured[0][0]['第0位']); self.assertEqual(captured[0][1], 32)
-        analysis.close()
+        analysis.close(); analysis.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 if __name__ == '__main__': unittest.main()
