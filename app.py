@@ -39,9 +39,10 @@ def save_image(parent, array):
 
 
 class Analysis(QDialog):
-    def __init__(self, parent, image, title):
+    def __init__(self, parent, image, title, source_ref=None):
         super().__init__(parent)
         self.image = image
+        self.source_ref = source_ref
         self.setWindowTitle('图片分析 — ' + title)
         self.resize(1050, 760)
         layout = QVBoxLayout(self)
@@ -69,7 +70,7 @@ class Analysis(QDialog):
         self.list.currentRowChanged.connect(self.show_variant)
         layout.addWidget(self.list)
         buttons = QHBoxLayout()
-        for label, callback in [('保存当前图片', self.save), ('LSB 快速检查', self.quick_scan), ('手动提取位数据', self.extract)]:
+        for label, callback in [('保存当前图片', self.save), ('检查隐藏文件', self.inspect_original), ('LSB 快速检查', self.quick_scan), ('手动提取位数据', self.extract)]:
             button = QPushButton(label)
             button.clicked.connect(callback)
             buttons.addWidget(button)
@@ -90,6 +91,10 @@ class Analysis(QDialog):
 
     def save(self):
         save_image(self, self.variants[self.list.currentRow()][1])
+
+    def inspect_original(self):
+        from file_dialog import FileInspectionDialog
+        FileInspectionDialog(self, self.source_ref).exec()
 
     def quick_scan(self):
         dialog = QDialog(self); dialog.setWindowTitle('LSB 快速检查'); dialog.resize(820, 600)
@@ -168,10 +173,11 @@ class Analysis(QDialog):
 
 
 class Card(QGraphicsPixmapItem):
-    def __init__(self, parent, image, title, generated=False):
+    def __init__(self, parent, image, title, generated=False, source_ref=None):
         super().__init__(pixmap(image, 72, 48))
         self.setShapeMode(QGraphicsPixmapItem.ShapeMode.BoundingRectShape)
         self.owner, self.image, self.title, self.generated = parent, image, title, generated
+        self.source_ref = source_ref
         self.links = []
         self.setFlags(self.GraphicsItemFlag.ItemIsMovable | self.GraphicsItemFlag.ItemIsSelectable | self.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
@@ -182,7 +188,7 @@ class Card(QGraphicsPixmapItem):
         self.timer = QTimer(); self.timer.setSingleShot(True); self.timer.timeout.connect(self.hover_preview)
 
     def mouseDoubleClickEvent(self, event):
-        self.timer.stop(); Analysis(self.owner, self.image, self.title).exec()
+        self.timer.stop(); Analysis(self.owner, self.image, self.title, self.source_ref).exec()
 
     def hoverEnterEvent(self, event):
         self.timer.start(1000); super().hoverEnterEvent(event)
@@ -196,7 +202,7 @@ class Card(QGraphicsPixmapItem):
 
     def contextMenuEvent(self, event):
         self.timer.stop(); self.owner.tip.hide()
-        menu = QMenu(); menu.addAction('打开图片分析', lambda: Analysis(self.owner, self.image, self.title).exec())
+        menu = QMenu(); menu.addAction('打开图片分析', lambda: Analysis(self.owner, self.image, self.title, self.source_ref).exec())
         if not self.isSelected():
             self.owner.canvas.scene().clearSelection(); self.setSelected(True)
         modules = self.owner.module_menu(); modules.setTitle('处理模块'); menu.addMenu(modules)
@@ -453,7 +459,7 @@ class Main(QMainWindow):
         cards = self.selected_cards()
         if len(cards) != 1:
             QMessageBox.information(self, '单图分析', '请选择一张图片，或直接双击图片。'); return
-        Analysis(self, cards[0].image, cards[0].title).exec()
+        Analysis(self, cards[0].image, cards[0].title, cards[0].source_ref).exec()
 
     def ask_channel(self):
         labels = ['红', '绿', '蓝', '透明度']
@@ -507,7 +513,7 @@ class Main(QMainWindow):
 
     def snapshot(self):
         indices = {card: i for i, card in enumerate(self.cards)}
-        cards = [(c.image, c.title, c.pos().x(), c.pos().y(), c.isSelected(), c.generated) for c in self.cards]
+        cards = [(c.image, c.title, c.pos().x(), c.pos().y(), c.isSelected(), c.generated, c.source_ref) for c in self.cards]
         operations = [([indices[c] for c in op.sources], indices[op.output] if op.output is not None else None, op.isSelected()) for op in self.operations]
         return cards, operations, self.canvas.sceneRect()
 
@@ -520,8 +526,8 @@ class Main(QMainWindow):
         for card in self.cards: card.timer.stop()
         self.canvas.scene().clear(); self.cards = []; self.operations = []
         self.canvas.setSceneRect(rect)
-        for image, title, x, y, selected, generated in cards:
-            card = Card(self, image, title, generated); self.canvas.scene().addItem(card); self.cards.append(card)
+        for image, title, x, y, selected, generated, source_ref in cards:
+            card = Card(self, image, title, generated, source_ref); self.canvas.scene().addItem(card); self.cards.append(card)
             card.setPos(x, y); card.setSelected(selected)
         for sources, output, selected in operations:
             op = self.create_operation([self.cards[i] for i in sources]); op.setSelected(selected)
@@ -539,7 +545,7 @@ class Main(QMainWindow):
     def copy_selection(self):
         cards = self.selected_cards()
         if not cards: self.statusBar().showMessage('请先选择图片'); return
-        self.clipboard_cards = [(c.image, c.title, c.generated) for c in cards]
+        self.clipboard_cards = [(c.image, c.title, c.generated, c.source_ref) for c in cards]
         self.clipboard_token = uuid.uuid4().hex
         mime = QMimeData(); mime.setData('application/x-stego-workbench', self.clipboard_token.encode())
         if len(cards) == 1: mime.setImageData(pixmap(cards[0].image).toImage())
@@ -555,12 +561,12 @@ class Main(QMainWindow):
         elif mime.hasImage():
             image = QApplication.clipboard().image().convertToFormat(QImage.Format.Format_RGBA8888)
             data = np.frombuffer(image.bits(), dtype=np.uint8).reshape(image.height(), image.bytesPerLine())[:, :image.width()*4].reshape(image.height(), image.width(), 4).copy()
-            copies = [(data, '剪贴板图片', False)]
+            copies = [(data, '剪贴板图片', False, None)]
         else:
             self.statusBar().showMessage('剪贴板中没有可粘贴的图片'); return
         before = self.snapshot(); self.canvas.scene().clearSelection()
-        for image, title, generated in copies:
-            card = self.add_card(image, title + ' 副本', generated=generated); card.setSelected(True)
+        for image, title, generated, source_ref in copies:
+            card = self.add_card(image, title + ' 副本', generated=generated, source_ref=source_ref); card.setSelected(True)
         self.remember(before); self.statusBar().showMessage(f'已粘贴 {len(copies)} 张图片')
 
     def delete_selection(self):
@@ -617,14 +623,18 @@ class Main(QMainWindow):
         before = self.snapshot(); old_count = len(self.cards)
         errors = []
         for path in sorted(paths, key=lambda p: natural_key(Path(p).name)):
-            try: self.add_card(load_image(path), Path(path).name)
+            try:
+                from file_inspection import source_reference
+                ref = source_reference(path); image = load_image(path)
+                if source_reference(path) != ref: raise ValueError('文件在导入时发生变化，请重试。')
+                self.add_card(image, Path(path).name, source_ref=ref)
             except Exception as e: errors.append(f'{Path(path).name}: {e}')
         if errors: QMessageBox.warning(self, '部分图片无法打开', '\n'.join(errors[:10]))
         if len(self.cards) != old_count: self.remember(before)
         self.statusBar().showMessage(f'画布中有 {len(self.cards)} 张图片')
 
-    def add_card(self, image, title, generated=False):
-        card = Card(self, image, title, generated); self.canvas.scene().addItem(card)
+    def add_card(self, image, title, generated=False, source_ref=None):
+        card = Card(self, image, title, generated, source_ref); self.canvas.scene().addItem(card)
         i = 0
         occupied = [c.sceneBoundingRect().adjusted(-10, -10, 10, 28) for c in self.cards]
         occupied += [op.sceneBoundingRect().adjusted(-10, -10, 10, 10) for op in self.operations]
