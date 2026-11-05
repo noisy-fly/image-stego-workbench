@@ -634,7 +634,7 @@ class Main(QMainWindow):
         self.statusBar().showMessage(f'已选中 {len(targets)} 张' + ('输入图片' if direction == 'input' else '处理结果'))
 
     def browse(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, '导入图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.gif *.tif *.tiff *.webp);;所有文件 (*)')
+        paths, _ = QFileDialog.getOpenFileNames(self, '导入图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.gif *.tif *.tiff *.webp *.bpg);;所有文件 (*)')
         self.load_paths(paths)
 
     def workflow(self):
@@ -658,6 +658,7 @@ class Main(QMainWindow):
                         if answer == QMessageBox.StandardButton.Yes:
                             image = load_image(io.BytesIO(bmp_with_height(path, height))); repair = f'高度 {old} → {height}（根据数据长度推测）'
                 except (OSError, ValueError):
+                    if Path(path).suffix.lower() == '.bpg': raise
                     from png_repair import repair_png_dimensions, MAX_FILE_SIZE
                     if ref[1] > MAX_FILE_SIZE: raise ValueError('图片读取失败，文件超过自动修复大小上限（256 MiB）。')
                     with open(path, 'rb') as source: repaired = repair_png_dimensions(source.read(MAX_FILE_SIZE + 1))
@@ -776,7 +777,7 @@ class Main(QMainWindow):
         except Exception as e: QMessageBox.warning(self, '处理失败', str(e))
 
     def average(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, '选择图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.tif *.tiff)')
+        paths, _ = QFileDialog.getOpenFileNames(self, '选择图片', '', '图片 (*.png *.bmp *.jpg *.jpeg *.tif *.tiff *.bpg)')
         if not paths: return
         paths = sorted(paths, key=lambda p: natural_key(Path(p).name))
         self.run_batch([Path(p).name for p in paths], lambda index: load_image(paths[index]))
@@ -804,6 +805,8 @@ def main():
         from app_version import APP_VERSION
         expected_version = os.environ.get('STEGO_EXPECT_VERSION')
         if expected_version and APP_VERSION != expected_version: raise ValueError('安装版版本号不匹配。')
+        bpg_sample = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'vendor' / 'bpg' / 'sample.bpg'
+        assert tuple(load_image(bpg_sample)[0, 0]) == (255, 0, 0, 128)
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)

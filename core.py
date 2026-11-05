@@ -2,6 +2,7 @@
 import numpy as np
 import re
 import itertools
+import os
 from PIL import Image, ImageOps, ImageFilter
 
 
@@ -25,6 +26,9 @@ def make_pair_groups(count, step=1, mode='subset', offset=0):
 
 
 def load_image(path):
+    if isinstance(path, (str, os.PathLike)) and str(path).lower().endswith('.bpg'):
+        from bpg_decoder import decode_bpg
+        return decode_bpg(path)
     with Image.open(path) as image:
         return np.array(image.convert('RGBA'), dtype=np.uint8)
 
