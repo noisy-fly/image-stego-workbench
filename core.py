@@ -171,3 +171,34 @@ def pair_xor_average(frames, threshold=129):
         b = np.asarray(Image.fromarray(second).convert('L')) if second.ndim == 3 else second
         total += np.bitwise_xor(a >= threshold, b >= threshold)
     return (total * 255 // (len(frames) // 2)).astype(np.uint8)
+
+
+def scan_lsb_conditional(image, channels, bits, directions=(False, True), start_bit=0, alignments=True, max_pixels=65536):
+    """遍历指定通道、位的排列，返回精确提取参数。"""
+    import math
+    if not channels or not bits or start_bit < 0: raise ValueError('请选择通道和位，并填写非负跳过位数。')
+    total = math.factorial(len(channels))*math.factorial(len(bits))*len(directions)*2*(8 if alignments else 1)
+    if total > 4096: raise ValueError(f'需要尝试 {total} 种组合，超过 4096 种上限；请减少通道或位。')
+    if image.ndim != 3 or image.shape[2] != 4: raise ValueError('需要 RGBA 图片。')
+    result=[]; height,width=image.shape[:2]; per_pixel=len(channels)*len(bits)
+    start_pixel=start_bit//per_pixel; count=min(height*width-start_pixel,max_pixels+2)
+    if count <= 0: return result
+    positions=np.arange(start_pixel,start_pixel+count)
+    pattern=rb'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]{0,31}\{[\x20-\x7a\x7c\x7e]{1,200}\}'
+    signatures=[('PNG 文件头',b'\x89PNG\r\n\x1a\n'),('ZIP 文件头',b'PK\x03\x04'),('PDF 文件头',b'%PDF-'),('GIF 文件头',b'GIF89a'),('7z 文件头',b'7z\xbc\xaf\x27\x1c')]
+    for column in directions:
+        y,x=(positions%height,positions//height) if column else (positions//width,positions%width)
+        pixels=image[y,x]
+        for ch in itertools.permutations(channels):
+            for order in itertools.permutations(bits):
+                values=np.stack([(pixels[:,c]>>b)&1 for c in ch for b in order],axis=1).reshape(-1)
+                for shift in range(8 if alignments else 1):
+                    skip=start_bit+shift-start_pixel*per_pixel
+                    for little in (False,True):
+                        data=np.packbits(values[skip:len(values)-(len(values)-skip)%8],bitorder='little' if little else 'big').tobytes()
+                        hits=[(kind,data.find(sig)) for kind,sig in signatures]
+                        hits += [('花括号格式文本',m.start()) for m in itertools.islice(re.finditer(pattern,data),16)]
+                        for kind,off in hits:
+                            if off >= 0:
+                                result.append(dict(channels=ch,bits=order,bit=order[0],column=column,little=little,kind=kind,offset=off,skip_bits=start_bit+shift+off*8,preview=data[off:off+80]))
+    return result

@@ -72,7 +72,7 @@ class Analysis(QDialog):
         self.list.currentRowChanged.connect(self.show_variant)
         layout.addWidget(self.list)
         buttons = QHBoxLayout()
-        for label, callback in [('保存当前图片', self.save), ('检查隐藏文件', self.inspect_original), ('LSB 快速检查', self.quick_scan), ('手动提取位数据', self.extract)]:
+        for label, callback in [('保存当前图片', self.save), ('检查隐藏文件', self.inspect_original), ('LSB 快速检查', self.quick_scan), ('条件 LSB 检查', self.conditional_scan), ('手动提取位数据', self.extract)]:
             button = QPushButton(label)
             button.clicked.connect(callback)
             buttons.addWidget(button)
@@ -130,13 +130,17 @@ class Analysis(QDialog):
         results_list.currentRowChanged.connect(show_result); button.clicked.connect(open_extract)
         QTimer.singleShot(0, run); dialog.exec()
 
+    def conditional_scan(self):
+        from conditional_lsb import ConditionalDialog
+        ConditionalDialog(self, self.image, self.extract).exec()
+
     def extract(self, preset=None):
         if not isinstance(preset, dict): preset = {}
         dialog = QDialog(self)
         dialog.setWindowTitle('提取像素位数据')
         dialog.resize(700, 500)
         box = QVBoxLayout(dialog)
-        box.addWidget(QLabel('选择通道和位；通道按下方顺序读取，所选位按低位到高位读取。'))
+        box.addWidget(QLabel('选择通道和位，并设置读取顺序。'))
         row = QHBoxLayout()
         checks = []
         for name in 'RGBA':
@@ -154,19 +158,28 @@ class Analysis(QDialog):
         order_row.addWidget(QLabel('仅使用勾选的通道')); box.addLayout(order_row)
         bit_row = QHBoxLayout(); bit_checks = []
         for i in range(8):
-            check = QCheckBox(f'第{i}位'); check.setChecked(i == preset.get('bit', 0)); bit_checks.append(check); bit_row.addWidget(check)
+            check = QCheckBox(f'第{i}位'); check.setChecked(i in preset.get('bits', (preset.get('bit', 0),))); bit_checks.append(check); bit_row.addWidget(check)
         box.addLayout(bit_row)
+        from PySide6.QtWidgets import QLineEdit
+        bit_order = QLineEdit(','.join(str(i) for i in preset.get('bits', tuple(range(8)))))
+        bit_order.setPlaceholderText('例如 4,2,1；其他未选中的位可省略')
+        bit_order.setObjectName('bitOrder'); box.addWidget(QLabel('位的读取顺序（逗号分隔，仅使用勾选的位）：')); box.addWidget(bit_order)
         column = QCheckBox('按列扫描（默认按行）'); column.setChecked(preset.get('column', False)); box.addWidget(column)
         reverse_x = QCheckBox('水平反向扫描（从右向左）'); box.addWidget(reverse_x)
         reverse_y = QCheckBox('垂直反向扫描（从下向上）'); box.addWidget(reverse_y)
         little = QCheckBox('每字节低位先写入'); little.setChecked(preset.get('little', False)); box.addWidget(little)
-        offset = QSpinBox(); offset.setRange(0, 1000000000); offset.setPrefix('跳过前面的位数：'); offset.setValue(preset.get('offset', 0) * 8); box.addWidget(offset)
+        offset = QSpinBox(); offset.setRange(0, 1000000000); offset.setPrefix('跳过前面的位数：'); offset.setValue(preset.get('skip_bits', preset.get('offset', 0) * 8)); box.addWidget(offset)
         if preset: box.addWidget(QLabel('已载入候选参数，提取从该线索的字节偏移处开始。'))
         output = QTextEdit(); output.setReadOnly(True); box.addWidget(output)
         data = [b'']
         def run():
             components = ['RGBA'.index(name) for name in channel_order.currentText() if checks['RGBA'.index(name)].isChecked()]
-            bits = [i for i, c in enumerate(bit_checks) if c.isChecked()]
+            selected_bits = [i for i, c in enumerate(bit_checks) if c.isChecked()]
+            try: bits = [int(v.strip()) for v in bit_order.text().replace('，', ',').split(',') if v.strip()]
+            except ValueError: QMessageBox.warning(dialog, '提示', '位顺序请填写 0 到 7，用逗号分隔。'); return
+            if len(bits) != len(set(bits)) or any(i not in range(8) for i in bits) or any(i not in bits for i in selected_bits):
+                QMessageBox.warning(dialog, '提示', '位顺序不得重复，并须包含全部勾选的位（0 到 7）。'); return
+            bits = [i for i in bits if i in selected_bits]
             if not components or not bits:
                 QMessageBox.warning(dialog, '提示', '请至少选择一个通道和一个位。'); return
             data[0] = extract_bits(self.image, components, bits, column.isChecked(), little.isChecked(),
