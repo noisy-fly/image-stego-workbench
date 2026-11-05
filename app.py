@@ -51,7 +51,9 @@ class Analysis(QDialog):
         search_button = QPushButton('基本信息快速搜索')
         search_button.setObjectName('basicSearchButton')
         search_button.clicked.connect(self.basic_search)
-        layout.addWidget(search_button)
+        top = QHBoxLayout(); top.addWidget(search_button)
+        hex_button = QPushButton('十六进制编辑'); hex_button.setObjectName('hexEditorButton')
+        hex_button.clicked.connect(self.edit_hex); top.addWidget(hex_button); layout.addLayout(top)
         self.name = QLabel('原图')
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -101,6 +103,17 @@ class Analysis(QDialog):
     def basic_search(self):
         from basic_search_dialog import BasicSearchDialog
         BasicSearchDialog(self, self.source_ref).exec()
+
+    def edit_hex(self):
+        from hex_editor import HexEditorDialog
+        def add_to_canvas(image, title, reference):
+            owner = self.parent()
+            before = owner.snapshot()
+            owner.add_card(image, title, source_ref=reference)
+            owner.remember(before)
+            owner.statusBar().showMessage('已将编辑后的图片添加到画布')
+        try: HexEditorDialog(self, self.source_ref, add_to_canvas).exec()
+        except (OSError, ValueError) as error: QMessageBox.warning(self, '无法打开十六进制编辑', str(error))
 
     def inspect_original(self):
         from file_dialog import FileInspectionDialog
@@ -824,6 +837,11 @@ def main():
             from file_inspection import source_reference
             basic_sample = Path(temp) / 'basic.bin'; basic_sample.write_bytes(b'demo{smoke}')
             assert search_basic(source_reference(basic_sample))['matches'][0]['text'] == 'demo{smoke}'
+            from hex_editor import HexEditorDialog
+            hex_sample = Path(temp) / 'hex.png'; Image.new('RGB', (2, 2), 'red').save(hex_sample)
+            hex_dialog = HexEditorDialog(window, source_reference(hex_sample), lambda *args: None)
+            assert hex_dialog.model.data(hex_dialog.model.index(0, 1)) == '89'
+            hex_dialog.close()
             video = str(Path(temp) / 'smoke.mkv')
             with av.open(video, 'w') as container:
                 stream = container.add_stream('ffv1', rate=10)
