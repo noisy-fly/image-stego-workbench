@@ -64,9 +64,9 @@ class FileInspectionDialog(QDialog):
         boundary = f'图片末尾附加 {tail:,} 字节' if tail is not None else '无法确定图片结构的结束位置'
         suffix = '；扫描未覆盖全部内容或候选数量已达上限' if result['incomplete'] else ''
         self.status.setText(f"检查完成：发现 {len(result['candidates'])} 条候选；{boundary}{suffix}")
-        positions = {'trailing': '图片尾部', 'inside': '图片内部', 'unknown': '位置未确定'}
+        positions = {'trailing': '图片尾部', 'inside': '图片内部', 'unknown': '位置未确定', 'source': '原始文件'}
         for item in result['candidates']:
-            confidence = '已验证 ZIP 结构' if item['verified'] else '疑似文件头'
+            confidence = '已验证 ZIP 目录' if item['verified'] else ('ZIP 目录线索，文件头可能受损' if item.get('directory_valid') else ('原文件' if item['location'] == 'source' else '疑似文件头'))
             self.items.addItem(f"{item['kind']} · {positions[item['location']]} · 偏移 {item['offset']:,} (0x{item['offset']:X}) · {confidence}")
         self.tail_button.setEnabled(tail is not None and tail > 0)
         if result['candidates']: self.items.setCurrentRow(0)
@@ -80,6 +80,11 @@ class FileInspectionDialog(QDialog):
             lines.append('ZIP 文件结构可读取；以下仅为目录信息，未解压。')
             lines.append('检测到加密标记。' if item['encrypted'] else 'ZIP 条目未检测到加密标记。')
             lines.extend(item['members'])
+        elif item.get('directory_valid'):
+            lines.append('ZIP 中央目录可读取，但起始文件头可能受损；保存的是原始数据，可能需要另行修复。')
+            lines.extend(item['members'])
+        elif item['location'] == 'source':
+            lines.append('原始文件（可能包含图片之后的附加数据）。')
         else:
             lines.append('仅根据文件头识别，内容可能不是有效文件。')
         self.detail.setPlainText('\n'.join(lines))

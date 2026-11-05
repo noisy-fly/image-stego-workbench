@@ -103,16 +103,16 @@ def gif_boundary(handle, size):
     return None
 
 
-def inspect_file(reference, chunk_size=1024*1024, max_scan=MAX_SCAN, progress=None, cancel=None):
+def inspect_file(reference, chunk_size=1024*1024, max_scan=None, progress=None, cancel=None):
     if not reference: raise ValueError('这张图片没有可检查的原始文件；请先保存并重新导入。')
-    if chunk_size < 1 or max_scan < 1: raise ValueError('扫描范围无效。')
+    if chunk_size < 1 or (max_scan is not None and max_scan < 1): raise ValueError('扫描范围无效。')
     cancel = cancel or (lambda: False)
     with open(reference[0], 'rb') as handle:
         check_source(handle, reference); size = reference[1]
         image_end = png_boundary(handle, size) or jpeg_boundary(handle, size) or gif_boundary(handle, size)
-        limit = min(size, max_scan); handle.seek(0); found = []; seen = set(); carry = b''; pos = 0
+        limit = size if max_scan is None else min(size, max_scan); handle.seek(0); found = []; seen = set(); carry = b''; pos = 0
         overlap = max(len(signature) for _, signature, _ in SIGNATURES) - 1
-        while pos < limit and len(found) < MAX_CANDIDATES:
+        while pos < limit:
             if cancel(): raise InterruptedError('已取消检查。')
             data = handle.read(min(chunk_size, limit - pos))
             if not data: break
@@ -121,7 +121,7 @@ def inspect_file(reference, chunk_size=1024*1024, max_scan=MAX_SCAN, progress=No
                 index = block.find(signature)
                 while index >= 0:
                     offset = base + index; key = (kind, offset)
-                    if offset > 0 and key not in seen:
+                    if offset > 0 and key not in seen and len(found) < MAX_CANDIDATES:
                         seen.add(key)
                         location = 'trailing' if image_end is not None and offset >= image_end else ('inside' if image_end is not None else 'unknown')
                         found.append({'kind': kind, 'extension': extension, 'offset': offset, 'location': location,
@@ -131,18 +131,26 @@ def inspect_file(reference, chunk_size=1024*1024, max_scan=MAX_SCAN, progress=No
                 if len(found) >= MAX_CANDIDATES: break
             pos += len(data); carry = block[-overlap:]
             if progress: progress(pos, size)
-        if size <= 128 * 1024 * 1024 and any(item['kind'] == 'ZIP' for item in found):
+        handle.seek(0); file_header = handle.read(12)
+        if image_end is not None or file_header.startswith((b'BM', b'RIFF', b'II*\x00', b'MM\x00*')):
+            found.append({'kind': '原始图片', 'extension': Path(reference[0]).suffix.lstrip('.') or 'bin', 'offset': 0, 'location': 'source', 'verified': False, 'members': [], 'encrypted': None})
+        if size <= 128 * 1024 * 1024:
             try:
                 handle.seek(0)
                 with zipfile.ZipFile(handle) as archive:
                     entries = archive.infolist()
                     if entries:
                         first = min(entry.header_offset for entry in entries)
-                        for item in found:
-                            if item['kind'] == 'ZIP' and item['offset'] == first:
-                                item['verified'] = True
-                                item['members'] = [entry.filename for entry in entries[:30]]
-                                item['encrypted'] = any(entry.flag_bits & 1 for entry in entries)
+                        matched = next((item for item in found if item['kind'] == 'ZIP' and item['offset'] == first), None)
+                        if matched is None and 0 <= first < size:
+                            matched = {'kind': 'ZIP（文件头可能受损）', 'extension': 'zip', 'offset': first,
+                                       'location': 'trailing' if image_end is not None and first >= image_end else ('inside' if image_end is not None else 'unknown'),
+                                       'verified': False, 'members': [], 'encrypted': None, 'directory_valid': True}
+                            found.append(matched)
+                        if matched is not None:
+                            matched['verified'] = matched['kind'] == 'ZIP'
+                            matched['members'] = [entry.filename for entry in entries[:30]]
+                            matched['encrypted'] = any(entry.flag_bits & 1 for entry in entries)
             except (zipfile.BadZipFile, OSError, ValueError, OverflowError): pass
         check_source(handle, reference)
     found.sort(key=lambda item: (item['offset'], item['kind']))

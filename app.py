@@ -650,6 +650,13 @@ class Main(QMainWindow):
                 ref = source_reference(path); repair = None
                 try:
                     image = load_image(path)
+                    from bmp_repair import bmp_height_candidate, bmp_with_height
+                    candidate = bmp_height_candidate(path)
+                    if candidate:
+                        old, height, extra = candidate
+                        answer = QMessageBox.question(self, '发现 BMP 高度异常', f'{Path(path).name} 的高度为 {old}，文件数据约可容纳 {height} 行（剩余 {extra} 字节）。这只是推测，多余数据也可能是隐藏内容。是否使用候选高度导入？原文件不会修改。')
+                        if answer == QMessageBox.StandardButton.Yes:
+                            image = load_image(io.BytesIO(bmp_with_height(path, height))); repair = f'高度 {old} → {height}（根据数据长度推测）'
                 except (OSError, ValueError):
                     from png_repair import repair_png_dimensions, MAX_FILE_SIZE
                     if ref[1] > MAX_FILE_SIZE: raise ValueError('图片读取失败，文件超过自动修复大小上限（256 MiB）。')
