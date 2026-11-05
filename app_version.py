@@ -2,4 +2,4 @@
 try:
     from build_version import APP_VERSION
 except ImportError:
-    APP_VERSION = '0.5.0'
+    APP_VERSION = '0.6.0'

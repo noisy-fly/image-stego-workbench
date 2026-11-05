@@ -1,4 +1,5 @@
 import sys
+import io
 import re
 import uuid
 import os
@@ -621,17 +622,28 @@ class Main(QMainWindow):
 
     def load_paths(self, paths):
         before = self.snapshot(); old_count = len(self.cards)
-        errors = []
+        errors = []; repairs = []
         for path in sorted(paths, key=lambda p: natural_key(Path(p).name)):
             try:
                 from file_inspection import source_reference
-                ref = source_reference(path); image = load_image(path)
+                ref = source_reference(path); repair = None
+                try:
+                    image = load_image(path)
+                except (OSError, ValueError):
+                    from png_repair import repair_png_dimensions, MAX_FILE_SIZE
+                    if ref[1] > MAX_FILE_SIZE: raise ValueError('图片读取失败，文件超过自动修复大小上限（256 MiB）。')
+                    with open(path, 'rb') as source: repaired = repair_png_dimensions(source.read(MAX_FILE_SIZE + 1))
+                    if not repaired: raise ValueError('图片无法读取，也未找到唯一可靠的 PNG 宽高修复结果。')
+                    data, repair = repaired; image = load_image(io.BytesIO(data))
                 if source_reference(path) != ref: raise ValueError('文件在导入时发生变化，请重试。')
-                self.add_card(image, Path(path).name, source_ref=ref)
+                self.add_card(image, Path(path).name + ('（已修复）' if repair else ''), source_ref=ref)
+                if repair: repairs.append(f'{Path(path).name}：{repair}')
             except Exception as e: errors.append(f'{Path(path).name}: {e}')
         if errors: QMessageBox.warning(self, '部分图片无法打开', '\n'.join(errors[:10]))
+        if repairs:
+            QMessageBox.information(self, '已自动修复并导入', '\n'.join(repairs[:10]) + '\n修复仅用于显示，原文件保持不变；检查隐藏文件时仍读取原文件。')
         if len(self.cards) != old_count: self.remember(before)
-        self.statusBar().showMessage(f'画布中有 {len(self.cards)} 张图片')
+        self.statusBar().showMessage(f'画布中有 {len(self.cards)} 张图片' + (f'，自动修复 {len(repairs)} 张' if repairs else ''))
 
     def add_card(self, image, title, generated=False, source_ref=None):
         card = Card(self, image, title, generated, source_ref); self.canvas.scene().addItem(card)
