@@ -48,6 +48,10 @@ class Analysis(QDialog):
         self.setWindowTitle('图片分析 — ' + title)
         self.resize(1050, 760)
         layout = QVBoxLayout(self)
+        search_button = QPushButton('基本信息快速搜索')
+        search_button.setObjectName('basicSearchButton')
+        search_button.clicked.connect(self.basic_search)
+        layout.addWidget(search_button)
         self.name = QLabel('原图')
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -93,6 +97,10 @@ class Analysis(QDialog):
 
     def save(self):
         save_image(self, self.variants[self.list.currentRow()][1])
+
+    def basic_search(self):
+        from basic_search_dialog import BasicSearchDialog
+        BasicSearchDialog(self, self.source_ref).exec()
 
     def inspect_original(self):
         from file_dialog import FileInspectionDialog
@@ -812,6 +820,10 @@ def main():
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)
         assert len(analysis.variants) == 38 and flow.scene is not None and extractor is not None and av.time_base > 0
         with tempfile.TemporaryDirectory() as temp:
+            from basic_search import search_basic
+            from file_inspection import source_reference
+            basic_sample = Path(temp) / 'basic.bin'; basic_sample.write_bytes(b'demo{smoke}')
+            assert search_basic(source_reference(basic_sample))['matches'][0]['text'] == 'demo{smoke}'
             video = str(Path(temp) / 'smoke.mkv')
             with av.open(video, 'w') as container:
                 stream = container.add_stream('ffv1', rate=10)
