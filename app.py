@@ -737,11 +737,25 @@ def main():
     if '--smoke-test' in sys.argv:
         from workflow_canvas import Workflow
         from extract_dialog import ExtractDialog
+        from extract_sources import inspect_source, extract_groups
         import av
+        import tempfile
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)
         assert len(analysis.variants) == 38 and flow.scene is not None and extractor is not None and av.time_base > 0
+        with tempfile.TemporaryDirectory() as temp:
+            video = str(Path(temp) / 'smoke.mkv')
+            with av.open(video, 'w') as container:
+                stream = container.add_stream('ffv1', rate=10)
+                stream.width = 8; stream.height = 8; stream.pix_fmt = 'bgr0'
+                frame = av.VideoFrame.from_ndarray(np.full((8, 8, 3), 123, dtype=np.uint8), format='rgb24')
+                for packet in stream.encode(frame): container.mux(packet)
+                for packet in stream.encode(): container.mux(packet)
+            track = inspect_source(video)[0]
+            result = extract_groups(video, 'video', track['index'], temp, count=1, group_size=1)
+            with Image.open(result['groups'][0][0]) as extracted:
+                assert extracted.convert('RGB').getpixel((0, 0)) == (123, 123, 123)
         if sys.stdout is not None: print('SMOKE_OK', flush=True)
         return
     window = Main(); window.show(); sys.exit(app.exec())
