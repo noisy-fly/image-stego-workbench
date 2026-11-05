@@ -2,6 +2,7 @@
 import base64
 import binascii
 import io
+import math
 import re
 import shutil
 import tarfile
@@ -15,6 +16,24 @@ from PIL import Image, UnidentifiedImageError
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 FORMATS = {'PNG': 'png', 'JPEG': 'jpg', 'BMP': 'bmp', 'GIF': 'gif', 'WEBP': 'webp', 'TIFF': 'tiff'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff'}
+
+
+def track_timing(stream, container_duration=None):
+    start = float(stream.start_time * stream.time_base) if stream.start_time is not None and stream.time_base else 0.0
+    metadata = {str(k).upper(): str(v) for k, v in stream.metadata.items()}
+    match = re.fullmatch(r'(\d+):(\d{2}):(\d{2}(?:\.\d+)?)', metadata.get('DURATION', ''))
+    if match:
+        hours, minutes, seconds = int(match[1]), int(match[2]), float(match[3])
+        end = hours * 3600 + minutes * 60 + seconds
+        if minutes < 60 and seconds < 60 and end >= start:
+            return {'duration': end - start, 'end_time': end, 'start_time': start,
+                    'timing_source': '轨道元数据', 'container_duration': container_duration}
+    duration = float(stream.duration * stream.time_base) if stream.duration is not None and stream.time_base else None
+    if duration is not None and math.isfinite(duration) and duration > 0 and (container_duration is None or abs(duration-container_duration) > 0.001):
+        return {'duration': duration, 'end_time': start + duration, 'start_time': start,
+                'timing_source': '轨道报告', 'container_duration': container_duration}
+    return {'duration': None, 'end_time': None, 'start_time': start,
+            'timing_source': None, 'container_duration': container_duration}
 
 
 def natural_key(name):
@@ -69,6 +88,7 @@ def inspect_source(path):
     except ImportError as exc: raise ValueError('未安装视频解码组件 PyAV，无法读取视频。') from exc
     with av.open(str(path)) as container:
         sources = []
+        container_duration = float(container.duration / av.time_base) if container.duration is not None else None
         for stream in container.streams:
             if stream.type not in ('video', 'subtitle'): continue
             codec = stream.codec_context.name if stream.codec_context else '未知'
@@ -76,12 +96,14 @@ def inspect_source(path):
                 label = f'视频轨 #{stream.index} · {codec} · {stream.width}×{stream.height}'
             else:
                 label = f'字幕轨 #{stream.index} · {codec}（尝试识别图片文本）'
-            sources.append({'kind': stream.type, 'index': stream.index, 'label': label})
+            item = {'kind': stream.type, 'index': stream.index, 'label': label}
+            if stream.type == 'video': item.update(track_timing(stream, container_duration))
+            sources.append(item)
         if not sources: raise ValueError('未找到视频轨或字幕轨。')
         return sources
 
 
-def iter_source(path, kind, stream_index, start_time, cancel):
+def iter_source(path, kind, stream_index, start_time, cancel, seek=True, filter_time=False):
     if kind == 'gif':
         with Image.open(path) as image:
             for i in range(getattr(image, 'n_frames', 1)):
@@ -112,12 +134,12 @@ def iter_source(path, kind, stream_index, start_time, cancel):
         stream = next((s for s in container.streams if s.index == stream_index and s.type == kind), None)
         if stream is None: raise ValueError('所选媒体轨道不存在。')
         if kind == 'video':
-            if start_time > 0: container.seek(int(start_time * av.time_base), backward=True)
+            if start_time > 0 and seek: container.seek(int(start_time * av.time_base), backward=True)
             for frame in container.decode(stream):
                 if cancel(): raise InterruptedError('已取消提取。')
-                if start_time > 0:
+                if start_time > 0 or filter_time:
                     if frame.time is None: raise ValueError('此视频帧缺少时间戳，无法按时间截取。')
-                    if frame.time < start_time: continue
+                    if frame.time + 1e-9 < start_time: continue
                 yield frame.to_image(), 'png'
         elif kind == 'subtitle':
             for packet in container.demux(stream):
@@ -128,18 +150,51 @@ def iter_source(path, kind, stream_index, start_time, cancel):
         else: raise ValueError('不支持的来源类型。')
 
 
+def scan_video_end(path, stream_index, cancel):
+    import av
+    with av.open(str(path)) as container:
+        stream = next((s for s in container.streams if s.index == stream_index and s.type == 'video'), None)
+        if stream is None: raise ValueError('所选视频轨不存在。')
+        count = 0; latest_time = None; latest_duration = 0; previous_time = None; missing_time = False
+        for frame in container.decode(stream):
+            if cancel(): raise InterruptedError('已取消提取。')
+            count += 1
+            if frame.time is not None:
+                previous_time, latest_time = latest_time, frame.time
+                duration = getattr(frame, 'duration', 0) or 0
+                latest_duration = float(duration * frame.time_base) if duration and frame.time_base else 0
+            else: missing_time = True
+        if not count: raise ValueError('所选视频轨没有可解码帧。')
+        if latest_time is not None and latest_duration <= 0 and previous_time is not None:
+            latest_duration = max(0, latest_time - previous_time)
+        return count, (latest_time + latest_duration if latest_time is not None and not missing_time else None)
+
+
 def extract_groups(path, kind, stream_index, output_parent, start=0, count=200, group_size=200,
-                   start_time=0, progress=None, cancel=None):
+                   start_time=0, progress=None, cancel=None, end_mode=None, end_seconds=0):
     if start < 0 or not 1 <= count <= 2000 or not 1 <= group_size <= 500 or start_time < 0:
         raise ValueError('起始位置、数量或每组数量超出范围。')
+    if end_mode not in (None, 'frames', 'seconds') or (end_mode and kind != 'video'):
+        raise ValueError('末尾提取仅支持视频轨。')
+    if end_mode and (start or start_time): raise ValueError('末尾提取不能同时设置跳过图片数或起始时间。')
+    if end_mode == 'seconds' and (not math.isfinite(end_seconds) or end_seconds <= 0): raise ValueError('末尾秒数必须大于 0。')
     output_parent = Path(output_parent).resolve()
     if not output_parent.is_dir(): raise ValueError('请选择存在的输出文件夹。')
     root = Path(tempfile.mkdtemp(prefix='图片提取_', dir=output_parent)).resolve()
-    groups = []; extracted = 0; cancel = cancel or (lambda: False)
+    groups = []; extracted = 0; truncated = False; cancel = cancel or (lambda: False)
     try:
-        for index, (data, extension) in enumerate(iter_source(Path(path), kind, stream_index, start_time, cancel)):
+        if end_mode:
+            if progress: progress(0, count)
+            total_frames, last_end = scan_video_end(Path(path), stream_index, cancel)
+            if end_mode == 'frames': start = max(0, total_frames - count)
+            else:
+                if last_end is None: raise ValueError('视频轨缺少帧时间戳，无法按末尾秒数提取；可选择最后 N 帧。')
+                start_time = last_end - end_seconds
+        for index, (data, extension) in enumerate(iter_source(Path(path), kind, stream_index, start_time, cancel, seek=not bool(end_mode), filter_time=end_mode == 'seconds')):
             if cancel(): raise InterruptedError('已取消提取。')
             if index < start: continue
+            if extracted == count:
+                truncated = True; break
             group_index = extracted // group_size
             if group_index == len(groups):
                 (root / f'第{group_index+1:03}组').mkdir(); groups.append([])
@@ -148,9 +203,11 @@ def extract_groups(path, kind, stream_index, output_parent, start=0, count=200, 
             else: data.save(target, format='PNG')
             groups[-1].append(str(target)); extracted += 1
             if progress: progress(extracted, count)
-            if extracted == count: break
-        if extracted == 0: raise ValueError('没有找到符合条件的图片；普通字幕不会被当作图片。')
-        return {'directory': str(root), 'groups': groups, 'count': extracted, 'requested': count}
+            if extracted == count and end_mode != 'seconds': break
+        if extracted == 0:
+            if kind == 'video': raise ValueError('所选视频轨在指定时间或帧位置后没有可提取的帧，请检查轨道与起始位置。')
+            raise ValueError('没有找到符合条件的图片；普通字幕不会被当作图片。')
+        return {'directory': str(root), 'groups': groups, 'count': extracted, 'requested': count, 'truncated': truncated}
     except Exception:
         if root.parent == output_parent and root.name.startswith('图片提取_'):
             shutil.rmtree(root)

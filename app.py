@@ -763,11 +763,12 @@ def main():
             with av.open(video, 'w') as container:
                 stream = container.add_stream('ffv1', rate=10)
                 stream.width = 8; stream.height = 8; stream.pix_fmt = 'bgr0'
-                frame = av.VideoFrame.from_ndarray(np.full((8, 8, 3), 123, dtype=np.uint8), format='rgb24')
-                for packet in stream.encode(frame): container.mux(packet)
+                for value in (40, 80, 123):
+                    frame = av.VideoFrame.from_ndarray(np.full((8, 8, 3), value, dtype=np.uint8), format='rgb24')
+                    for packet in stream.encode(frame): container.mux(packet)
                 for packet in stream.encode(): container.mux(packet)
             track = inspect_source(video)[0]
-            result = extract_groups(video, 'video', track['index'], temp, count=1, group_size=1)
+            result = extract_groups(video, 'video', track['index'], temp, count=1, group_size=1, end_mode='frames')
             with Image.open(result['groups'][0][0]) as extracted:
                 assert extracted.convert('RGB').getpixel((0, 0)) == (123, 123, 123)
         if sys.stdout is not None: print('SMOKE_OK', flush=True)

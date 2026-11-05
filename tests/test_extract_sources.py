@@ -5,7 +5,9 @@ import tempfile
 import unittest
 import zipfile
 import os
+from unittest.mock import patch
 from pathlib import Path
+from fractions import Fraction
 import av
 import numpy as np
 from PIL import Image
@@ -96,6 +98,71 @@ class ExtractSourceTests(unittest.TestCase):
             result = extract_groups(source, 'video', track['index'], temp, start_time=0.2, start=1, count=3, group_size=2)
             self.assertEqual([len(g) for g in result['groups']], [2, 1])
             self.assertEqual(Image.open(result['groups'][0][0]).convert('RGB').getpixel((0,0)), (60,60,60))
+
+    def test_last_frames_and_seconds_and_track_duration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'two.mkv'
+            with av.open(str(source), 'w') as container:
+                one = container.add_stream('ffv1', rate=10); two = container.add_stream('ffv1', rate=10)
+                for stream in (one, two): stream.width = 8; stream.height = 8; stream.pix_fmt = 'bgr0'
+                for i in range(8):
+                    for stream, limit in ((one, 8), (two, 4)):
+                        if i >= limit: continue
+                        frame = av.VideoFrame.from_ndarray(np.full((8,8,3), i*20, dtype=np.uint8), format='rgb24')
+                        for packet in stream.encode(frame): container.mux(packet)
+                for stream in (one, two):
+                    for packet in stream.encode(): container.mux(packet)
+            tracks = inspect_source(source)
+            self.assertAlmostEqual(tracks[0]['duration'], 0.8, places=2)
+            self.assertAlmostEqual(tracks[1]['duration'], 0.4, places=2)
+            result = extract_groups(source, 'video', tracks[1]['index'], temp, count=2, group_size=2, end_mode='frames')
+            values = [Image.open(p).convert('RGB').getpixel((0,0))[0] for p in result['groups'][0]]
+            self.assertEqual(values, [40, 60])
+            result = extract_groups(source, 'video', tracks[1]['index'], temp, count=10, group_size=10, end_mode='seconds', end_seconds=0.2)
+            values = [Image.open(p).convert('RGB').getpixel((0,0))[0] for p in result['groups'][0]]
+            self.assertEqual(values, [40, 60])
+            truncated = extract_groups(source, 'video', tracks[1]['index'], temp, count=1, group_size=1, end_mode='seconds', end_seconds=0.2)
+            self.assertTrue(truncated['truncated'])
+
+    def test_video_track_duration_does_not_trust_container_fallback(self):
+        from extract_sources import track_timing
+        class Stream:
+            metadata = {}; time_base = 0.001; duration = 10000; start_time = None
+        info = track_timing(Stream(), container_duration=10.0)
+        self.assertIsNone(info['duration'])
+        self.assertEqual(info['container_duration'], 10.0)
+
+    def test_last_seconds_uses_timestamps_not_nominal_fps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'variable.mkv'
+            with av.open(str(source), 'w') as container:
+                stream = container.add_stream('ffv1', rate=10)
+                stream.width = 8; stream.height = 8; stream.pix_fmt = 'bgr0'
+                for pts in (0, 1, 3, 7):
+                    frame = av.VideoFrame.from_ndarray(np.full((8,8,3), pts*20, dtype=np.uint8), format='rgb24')
+                    frame.pts = pts; frame.time_base = Fraction(1, 10)
+                    for packet in stream.encode(frame): container.mux(packet)
+                for packet in stream.encode(): container.mux(packet)
+            track = inspect_source(source)[0]
+            result = extract_groups(source, 'video', track['index'], temp, count=10, group_size=10, end_mode='seconds', end_seconds=0.3)
+            values = [Image.open(p).convert('RGB').getpixel((0,0))[0] for p in result['groups'][0]]
+            self.assertEqual(values, [140])
+
+    def test_dialog_shows_selected_track_duration_and_tail_controls(self):
+        app = QApplication.instance() or QApplication([])
+        owner = Main(); dialog = ExtractDialog(owner)
+        tracks = [
+            {'kind':'video','index':0,'label':'主轨','duration':1039.349,'end_time':1039.349,'timing_source':'轨道元数据','container_duration':1039.371},
+            {'kind':'video','index':2,'label':'第二轨','duration':1030.967,'end_time':1030.967,'timing_source':'轨道元数据','container_duration':1039.371},
+        ]
+        with patch('extract_dialog.inspect_source', return_value=tracks): dialog.set_source('example.mkv')
+        dialog.tracks.setCurrentIndex(1)
+        self.assertIn('00:17:10.967', dialog.track_info.text())
+        self.assertIn('00:17:19.371', dialog.track_info.text())
+        dialog.mode.setCurrentIndex(1)
+        self.assertFalse(dialog.start_time.isEnabled()); self.assertFalse(dialog.start.isEnabled())
+        dialog.mode.setCurrentIndex(2); self.assertTrue(dialog.end_seconds.isEnabled())
+        dialog.close(); owner.close(); app.processEvents()
 
     def test_dialog_extracts_and_imports_only_selected_group(self):
         app = QApplication.instance() or QApplication([])
