@@ -35,6 +35,6 @@ class HexEditorTests(unittest.TestCase):
             with self.assertRaises(ValueError): save_edited(ref, b'broken', dst)
             self.assertFalse(dst.exists()); self.assertEqual(src.read_bytes(), original)
             image, new_ref=save_edited(ref, raw, dst)
-            self.assertEqual(image.shape, (2,3,4)); self.assertEqual(Path(new_ref[0]),dst); self.assertEqual(src.read_bytes(), original)
+            self.assertEqual(image.shape, (2,3,4)); self.assertTrue(os.path.samefile(new_ref[0], dst)); self.assertEqual(src.read_bytes(), original)
             src.write_bytes(original+b'x')
             with self.assertRaises(ValueError): save_edited(ref, raw, Path(d)/'other.png')
