@@ -2,6 +2,12 @@
 
 中文 Windows 图片隐写分析原型。独立实现基础像素操作，以 StegSolve 的常用功能作为参考，不包含 StegSolve-NG 源码。
 
+## 界面预览
+
+单图分析中可以识别当前图片的二维码或条形码，识别结果直接显示在窗口中。
+
+![单图分析中的二维码识别界面](docs/images/qr-analysis.png)
+
 ## 启动
 
 Windows 64 位用户可在 [Releases 下载页面](https://github.com/noisy-fly/image-stego-workbench/releases/latest) 下载附件 `StegoWorkbench-Setup.exe`，按中文向导安装后从开始菜单启动；安装版不需要自己安装 Python。安装包目前没有代码签名，Windows 可能提示无法验证发布者，请从本仓库 Releases 下载并核对同时提供的 SHA-256 值。程序本地处理图片。
