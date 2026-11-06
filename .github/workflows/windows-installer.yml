@@ -41,7 +41,7 @@ jobs:
           "APP_VERSION = '$appVersion'" | Set-Content -Encoding utf8 build_version.py
           $avLibs = python -c "import av,pathlib; print(pathlib.Path(av.__file__).parent.parent / 'av.libs')"
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $avLibs)) { throw '找不到 PyAV 媒体解码库' }
-          python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas --hidden-import extract_dialog --hidden-import build_version --collect-all av --add-data "vendor/bpg;vendor/bpg" --add-data "vendor/jsteg;vendor/jsteg" --add-binary "$avLibs\*.dll;av.libs" app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name StegoWorkbench --hidden-import workflow_canvas --hidden-import extract_dialog --hidden-import build_version --collect-all av --add-data "vendor/bpg;vendor/bpg" --add-data "vendor/jsteg;vendor/jsteg" --add-data "vendor/zxing;vendor/zxing" --add-binary "$avLibs\*.dll;av.libs" app.py
           if ($LASTEXITCODE -ne 0) { throw '程序打包失败' }
       - name: 编译中文安装向导
         shell: pwsh

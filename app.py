@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QGraphicsEllipseItem, QGraphicsPathItem)
 from PySide6.QtGui import QIcon
 from core import (load_image, bit_plane, channel, invert, extract_bits, pair_xor_average,
-                  make_pair_groups, process_image, combine_images, aggregate_images, scan_lsb)
+                  make_pair_groups, process_image, combine_images, aggregate_images, concatenate_images, scan_lsb)
 
 
 def natural_key(value):
@@ -55,7 +55,9 @@ class Analysis(QDialog):
         hex_button = QPushButton('十六进制编辑'); hex_button.setObjectName('hexEditorButton')
         hex_button.clicked.connect(self.edit_hex); top.addWidget(hex_button)
         jsteg_button = QPushButton('JSteg 提取'); jsteg_button.setObjectName('jstegButton')
-        jsteg_button.clicked.connect(self.extract_jsteg); top.addWidget(jsteg_button); layout.addLayout(top)
+        jsteg_button.clicked.connect(self.extract_jsteg); top.addWidget(jsteg_button)
+        barcode_button = QPushButton('二维码 / 条形码'); barcode_button.setObjectName('barcodeButton')
+        barcode_button.clicked.connect(self.scan_barcode); top.addWidget(barcode_button); layout.addLayout(top)
         self.name = QLabel('原图')
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -68,7 +70,8 @@ class Analysis(QDialog):
             self.variants.append((name + '通道', channel(image, c)))
             for b in range(8):
                 self.variants.append((f'{name}通道 · 第 {b} 位', bit_plane(image, c, b)))
-        self.list = QListWidget()
+        from variant_drag import VariantList
+        self.list = VariantList(self)
         self.list.setViewMode(QListWidget.ViewMode.IconMode)
         self.list.setFlow(QListWidget.Flow.LeftToRight)
         self.list.setWrapping(False)
@@ -105,6 +108,10 @@ class Analysis(QDialog):
     def basic_search(self):
         from basic_search_dialog import BasicSearchDialog
         BasicSearchDialog(self, self.source_ref).exec()
+
+    def scan_barcode(self):
+        from barcode_scan import BarcodeDialog
+        BarcodeDialog(self, self.variants[self.list.currentRow()][1]).exec()
 
     def extract_jsteg(self):
         from jsteg_dialog import JstegDialog
@@ -237,7 +244,7 @@ class Card(QGraphicsPixmapItem):
         self.timer = QTimer(); self.timer.setSingleShot(True); self.timer.timeout.connect(self.hover_preview)
 
     def mouseDoubleClickEvent(self, event):
-        self.timer.stop(); Analysis(self.owner, self.image, self.title, self.source_ref).exec()
+        self.timer.stop(); self.owner.show_analysis(self)
 
     def hoverEnterEvent(self, event):
         self.timer.start(1000); super().hoverEnterEvent(event)
@@ -251,7 +258,7 @@ class Card(QGraphicsPixmapItem):
 
     def contextMenuEvent(self, event):
         self.timer.stop(); self.owner.tip.hide()
-        menu = QMenu(); menu.addAction('打开图片分析', lambda: Analysis(self.owner, self.image, self.title, self.source_ref).exec())
+        menu = QMenu(); menu.addAction('打开图片分析', lambda: self.owner.show_analysis(self))
         if not self.isSelected():
             self.owner.canvas.scene().clearSelection(); self.setSelected(True)
         modules = self.owner.module_menu(); modules.setTitle('处理模块'); menu.addMenu(modules)
@@ -334,7 +341,19 @@ class Canvas(QGraphicsView):
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
     def dropEvent(self, event):
-        self.owner.load_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]); event.acceptProposedAction()
+        from variant_drag import VARIANT_MIME
+        urls = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if event.mimeData().hasFormat(VARIANT_MIME) and urls:
+            try: image = load_image(urls[0])
+            except Exception as error: QMessageBox.warning(self, '导入失败', str(error)); return
+            before = self.owner.snapshot(); self.scene().clearSelection()
+            title = bytes(event.mimeData().data(VARIANT_MIME)).decode('utf-8', errors='replace') or '图片变体'
+            card = self.owner.add_card(image, title, generated=True)
+            card.setPos(self.mapToScene(event.position().toPoint())); card.setSelected(True)
+            self.owner.remember(before); self.owner.statusBar().showMessage('已将图片变体添加到画布')
+        else:
+            self.owner.load_paths(urls)
+        event.acceptProposedAction()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.itemAt(event.position().toPoint()) is not None:
@@ -472,12 +491,16 @@ class Main(QMainWindow):
                            ('绝对差值', 'difference'), ('相加（溢出回绕）', 'add'),
                            ('相减（前图减后图，溢出回绕）', 'subtract'), ('两图平均', 'mean')]:
             add(combine, label, lambda checked=False, k=key, name=label: self.apply_combine(k, name))
+        add(combine, '横向拼接（高度相同）', lambda: self.apply_combine('join_horizontal', '横向拼接'))
+        add(combine, '纵向拼接（宽度相同）', lambda: self.apply_combine('join_vertical', '纵向拼接'))
         return combine
 
     def statistics_menu(self):
         multi = QMenu('多图统计（选中图片）', self); add = self.add_menu_action
         for label, key in [('逐像素平均', 'mean'), ('逐像素最小值', 'min'), ('逐像素最大值', 'max')]:
             add(multi, label, lambda checked=False, k=key, name=label: self.apply_aggregate(k, name))
+        add(multi, '横向拼接（高度相同）', lambda: self.apply_join('horizontal'))
+        add(multi, '纵向拼接（宽度相同）', lambda: self.apply_join('vertical'))
         add(multi, '配对 XOR 后平均…', self.average_selected)
         return multi
 
@@ -508,7 +531,15 @@ class Main(QMainWindow):
         cards = self.selected_cards()
         if len(cards) != 1:
             QMessageBox.information(self, '单图分析', '请选择一张图片，或直接双击图片。'); return
-        Analysis(self, cards[0].image, cards[0].title, cards[0].source_ref).exec()
+        self.show_analysis(cards[0])
+
+    def show_analysis(self, card):
+        dialog = Analysis(self, card.image, card.title, card.source_ref)
+        if not hasattr(self, '_analyses'): self._analyses = set()
+        self._analyses.add(dialog)
+        dialog.finished.connect(lambda _: self._analyses.discard(dialog))
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
 
     def ask_channel(self):
         labels = ['红', '绿', '蓝', '透明度']
@@ -549,6 +580,17 @@ class Main(QMainWindow):
             op = self.create_operation([card]); out = self.add_card(result, label + ' 结果', generated=True)
             op.output = out; out.links.append(op); op.update_paths(); out.setSelected(True)
         self.remember(before); self.statusBar().showMessage(f'{label}：已处理 {len(results)} 张图片')
+
+    def apply_join(self, direction):
+        cards = self.selected_cards()
+        if len(cards) < 2:
+            QMessageBox.information(self, '选择图片', '请先选择至少两张图片，按文件名顺序拼接。'); return
+        try: result = concatenate_images([c.image for c in cards], direction)
+        except Exception as exc: QMessageBox.warning(self, '拼接失败', str(exc)); return
+        before = self.snapshot(); self.canvas.scene().clearSelection()
+        result_card = self.add_card(result, ('横向' if direction == 'horizontal' else '纵向') + '拼接结果', generated=True)
+        result_card.setSelected(True); self.remember(before)
+        self.statusBar().showMessage(f'已按文件名顺序拼接 {len(cards)} 张图片')
 
     def apply_aggregate(self, operation, label):
         cards = self.selected_cards()
@@ -762,16 +804,21 @@ class Main(QMainWindow):
         operations = [op for op in self.operations if op.isSelected()]
         if not operations:
             QMessageBox.information(self, '选择处理节点', '请先框选一个或多个 + 节点。'); return
+        try:
+            results = []
+            for op in operations:
+                if op.output is not None: raise ValueError('所选节点已有结果，不能重复处理。')
+                a, b = (c.image for c in op.sources)
+                if operation.startswith('join_'):
+                    result = concatenate_images([a, b], operation[5:])
+                else:
+                    if a.shape != b.shape: raise ValueError('选中节点中的图片尺寸不一致。')
+                    result = combine_images(a, b, operation)
+                results.append(result)
+        except Exception as exc:
+            QMessageBox.warning(self, '处理失败', str(exc)); return
         before = self.snapshot()
-        for op in operations:
-            if op.output is not None:
-                QMessageBox.warning(self, '已有结果', '所选节点已有结果，不能重复处理。'); return
-            a, b = (c.image for c in op.sources)
-            if a.shape != b.shape:
-                QMessageBox.warning(self, '尺寸不一致', '选中节点中的图片尺寸不一致，未执行任何操作。'); return
-        for op in operations:
-            a, b = (c.image for c in op.sources)
-            result = combine_images(a, b, operation)
+        for op, result in zip(operations, results):
             out = self.add_card(result, label + ' 结果', generated=True); out.setPos(op.pos() + QPointF(100, 0))
             op.output = out; out.links.append(op); op.update_paths()
         self.remember(before)
@@ -838,6 +885,10 @@ def main():
         from file_inspection import source_reference
         jsteg_sample = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'vendor' / 'jsteg' / 'sample.jpg'
         assert reveal_jsteg(source_reference(jsteg_sample)) == b'demo{sample}\x00\xffbinary'
+        import zxingcpp
+        from barcode_scan import scan_codes
+        barcode = zxingcpp.create_barcode('smoke-test', zxingcpp.BarcodeFormat.QRCode).to_image(scale=4)
+        assert scan_codes(np.asarray(barcode))[0]['text'] == 'smoke-test'
         image = np.full((4, 4, 4), 255, dtype=np.uint8)
         window = Main(); window.add_card(image, '测试.png')
         analysis = Analysis(window, image, '测试.png'); flow = Workflow(window); extractor = ExtractDialog(window)

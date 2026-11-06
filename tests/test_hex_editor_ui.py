@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from PIL import Image
 from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtTest import QTest
 from app import Analysis, Main
 from file_inspection import source_reference
 from hex_editor import HexEditorDialog
@@ -27,6 +28,10 @@ class HexEditorUiTests(unittest.TestCase):
                 self.assertTrue(dialog.model.setData(dialog.model.index(pos//16, pos%16+1), '42'))
                 with patch('hex_editor.QFileDialog.getSaveFileName', return_value=(str(result),'')), patch('hex_editor.QMessageBox.information'):
                     dialog.save()
+                    for _ in range(500):
+                        self.app.processEvents()
+                        if result.exists() and len(w.cards) == 2: break
+                        QTest.qWait(10)
             with patch.object(HexEditorDialog, 'exec', run): analysis.edit_hex()
             self.assertEqual(len(w.cards),2); self.assertEqual(result.read_bytes(),original[:-1]+b'B')
             self.assertEqual(source.read_bytes(),original); self.assertEqual(w.cards[-1].source_ref,source_reference(result))

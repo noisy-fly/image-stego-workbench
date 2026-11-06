@@ -103,6 +103,19 @@ def combine_images(first, second, operation):
     return result
 
 
+def concatenate_images(images, direction):
+    if len(images) < 2: raise ValueError('请至少选择两张图片。')
+    if direction not in ('horizontal', 'vertical'): raise ValueError('不支持的拼接方向。')
+    axis = 1 if direction == 'horizontal' else 0
+    fixed = 0 if axis == 1 else 1
+    if any(image.ndim != 3 or image.shape[2] != 4 for image in images): raise ValueError('图片格式无效。')
+    if any(image.shape[fixed] != images[0].shape[fixed] for image in images):
+        raise ValueError('横向拼接要求高度相同，纵向拼接要求宽度相同；请先调整图片尺寸。')
+    size = sum(image.shape[axis] for image in images) * images[0].shape[fixed]
+    if size > 50_000_000: raise ValueError('拼接结果超过 5000 万像素。')
+    return np.concatenate(images, axis=axis)
+
+
 def aggregate_images(images, operation):
     if len(images) < 2: raise ValueError('至少需要两张图片。')
     if any(im.shape != images[0].shape for im in images): raise ValueError('图片尺寸必须一致。')
